@@ -1,0 +1,162 @@
+# shellcheck shell=bash
+#
+# btc Helper Scripts - Installer Functions
+#
+# Copyright (C) 2025  btc.jost AG
+# Copyright (C) 2025  Simon Gilli
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+# shellcheck disable=SC1090
+source <(wget -qO- https://raw.githubusercontent.com/btc-jost/scripts/main/misc/core.func)
+
+MODE=${1:-install} # install, update, remove
+
+variables_init() {
+  declare -a _PACKAGES_ADD
+  declare -A _EVENT_HANDLERS
+  _EVENT_NAMES=("configure" "pre_install" "install" "post_install" "pre_update" "update" "post_update" "pre_remove" "remove" "post_remove")
+  INSTALL_EVENTS=("configure" "pre_install" "install" "post_install")
+  UPDATE_EVENTS=("configure" "pre_update" "update" "post_update")
+  REMOVE_EVENTS=("pre_remove" "remove" "post_remove")
+}
+
+installer_run() {
+  #
+  echo "Starting installer..."
+  #
+  case $MODE in
+    install)
+      register_event_handler "configure" "_configure"
+      register_event_handler "install" "_install_packages"
+
+      for event in "${INSTALL_EVENTS[@]}"; do
+        echo "Running event: $event"
+        for handler in ${_EVENT_HANDLERS[${event}]}; do
+          $handler
+        done
+      done
+
+      install_packages
+
+      for handler in "${_EVENT_HANDLERS[post_install][@]}"; do
+        $handler
+      done
+      ;;
+    update)
+      for handler in "${_EVENT_HANDLERS[pre_update][@]}"; do
+        $handler
+      done
+
+      install_packages
+
+      for handler in "${_EVENT_HANDLERS[post_update][@]}"; do
+        $handler
+      done
+      ;;
+    remove)
+      for handler in "${_EVENT_HANDLERS[pre_remove][@]}"; do
+        $handler
+      done
+
+      # Removal logic can be added here
+
+      for handler in "${_EVENT_HANDLERS[post_remove][@]}"; do
+        $handler
+      done
+      ;;
+    *)
+      echo "Invalid mode: $MODE"
+      exit 1
+      ;;
+  esac
+}
+
+add_packages() {
+  _PACKAGES_ADD+=("$@")
+}
+
+# Event handler registration
+# $1 - event name
+# $2 - function name
+register_event_handler() {
+  if [[ ! " ${_EVENT_NAMES[*]} " =~ " ${1} " ]]; then
+    echo "Error: Invalid event name '${1}'"
+    return 1
+  fi
+
+  _EVENT_HANDLERS[$1]+=("$2")
+}
+
+_configure() {
+  :
+}
+
+_install_packages() {
+  if [ "${#_PACKAGES_ADD[@]}" -gt 0 ]; then
+    $STD apt update 2>/dev/null || true
+    _install_packages_with_retry "${_PACKAGES_ADD[@]}"
+  fi
+}
+
+
+# ------------------------------------------------------------------------------
+# Install packages with retry logic
+# Usage: install_packages_with_retry "mysql-server" "mysql-client"
+# ------------------------------------------------------------------------------
+_install_packages_with_retry() {
+  local packages=("$@")
+  local max_retries=2
+  local retry=0
+
+  while [[ $retry -le $max_retries ]]; do
+    if $STD apt install -y "${packages[@]}" 2>/dev/null; then
+      return 0
+    fi
+
+    retry=$((retry + 1))
+    if [[ $retry -le $max_retries ]]; then
+      msg_warn "Package installation failed, retrying ($retry/$max_retries)..."
+      sleep 2
+      $STD apt update 2>/dev/null || true
+    fi
+  done
+
+  return 1
+}
+
+# ------------------------------------------------------------------------------
+# Upgrade specific packages with retry logic
+# Usage: upgrade_packages_with_retry "mariadb-server" "mariadb-client"
+# ------------------------------------------------------------------------------
+_upgrade_packages_with_retry() {
+  local packages=("$@")
+  local max_retries=2
+  local retry=0
+
+  while [[ $retry -le $max_retries ]]; do
+    if $STD apt install --only-upgrade -y "${packages[@]}" 2>/dev/null; then
+      return 0
+    fi
+
+    retry=$((retry + 1))
+    if [[ $retry -le $max_retries ]]; then
+      msg_warn "Package upgrade failed, retrying ($retry/$max_retries)..."
+      sleep 2
+      $STD apt update 2>/dev/null || true
+    fi
+  done
+
+  return 1
+}
