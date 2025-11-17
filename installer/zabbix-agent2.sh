@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# btc Helper Scripts - 3CX Post-Installation Script
+# btc Helper Scripts - Zabbix Agent 2 Installation Script
 #
 # Copyright (C) 2025  btc.jost AG
 # Copyright (C) 2025  Simon Gilli
@@ -18,15 +18,35 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-source <(wget -qO- https://raw.githubusercontent.com/btc-jost/scripts/main/misc/script.func)
+source <(wget -qO- https://raw.githubusercontent.com/btc-jost/scripts/main/misc/installer.func)
 
-# Install Zabbix repository
-wget https://repo.zabbix.com/zabbix/7.4/release/debian/pool/main/z/zabbix-release/zabbix-release_latest_7.4+debian12_all.deb
-dpkg -i zabbix-release_latest_7.4+debian12_all.deb
-apt update
+ZABBIX_VERSION="8.0"
 
-# Clean up
-rm zabbix-release_latest_7.4+debian12_all.deb
+zabbix_agent2_preinstall() {
+  # Install Zabbix repository
+  if [ -f /etc/os-release ]; then
+    local PACKAGE_NAME=""
+
+    source /etc/os-release
+
+    # Check for Raspbian
+    if [ "$ID" == "raspbian" ]; then
+      PACKAGE_NAME="zabbix-release_latest_${ZABBIX_VERSION}+${ID_LIKE}${VERSION_ID}_all.deb"
+    else
+      PACKAGE_NAME="zabbix-release_latest_${ZABBIX_VERSION}+${ID}${VERSION_ID}_all.deb"
+    fi
+
+    PACKAGE_URL="https://repo.zabbix.com/zabbix/${ZABBIX_VERSION}/release/${ID}/pool/main/z/zabbix-release/${PACKAGE_NAME}"
+
+    wget "${PACKAGE_URL}"
+    dpkg -i "${PACKAGE_NAME}"
+
+    apt update
+
+    # Clean up
+    rm "${PACKAGE_NAME}"
+  fi
+}
 
 # Install Zabbix agent 2
 apt install zabbix-agent2 -y
@@ -35,18 +55,5 @@ apt install zabbix-agent2 -y
 echo -e 'Server=192.168.72.5\nServerActive=192.168.72.5\nHostname=' > /etc/zabbix/zabbix_agent2.d/smart_monitoring.conf
 
 # Enable and start Zabbix agent 2 service
-systemctl stop zabbix-agent2
+systemctl restart zabbix-agent2
 systemctl enable zabbix-agent2
-systemctl start zabbix-agent2
-
-# Install chrony for time synchronization
-apt install chrony -y
-
-# Configure chrony to use Swiss NTP servers
-echo -e 'pool 0.ch.pool.ntp.org iburst\npool 1.ch.pool.ntp.org iburst\npool 2.ch.pool.ntp.org iburst\npool 3.ch.pool.ntp.org iburst' > /etc/chrony/sources.d/pool-ntp-org.sources
-
-# Reload sources to apply changes
-chronyc reload sources
-
-# Final message
-echo "Post-installation script completed."
