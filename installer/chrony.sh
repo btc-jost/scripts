@@ -25,7 +25,9 @@ _CHRONY_NTP_FILE="/etc/chrony/sources.d/pool-ntp-org.sources"
 
 configure_chrony() {
   # NTP Server Configuration
-  local choice=$(whiptail --backtitle ${TITLE} --title "${APP} LXC Update/Setting" --menu \
+  local choice
+
+  choice=$(whiptail --backtitle ${TITLE} --title "${APP} LXC Update/Setting" --menu \
     "Support/Update functions for ${APP} LXC. Choose an option:" \
     12 60 3 \
     "1" "Swiss NTP server pool" \
@@ -44,7 +46,9 @@ configure_chrony() {
   2)
     CHRONY_NTP_SERVERS=()
     while true; do
-      local ntp_server=$(whiptail --backtitle ${TITLE} --inputbox "Enter NTP server. Leave empty to finish." 10 60 3>&1 1>&2 2>&3)
+      local ntp_server
+
+      ntp_server=$(whiptail --backtitle ${TITLE} --inputbox "Enter NTP server. Leave empty to finish." 10 60 3>&1 1>&2 2>&3)
 
       if [ -z "$ntp_server" ]; then
         break
@@ -62,7 +66,7 @@ configure_chrony() {
 }
 
 pre_install_chrony() {
-
+  true
 }
 
 install_chrony() {
@@ -83,27 +87,27 @@ post_install_chrony() {
 }
 
 pre_update_chrony() {
-
+  true
 }
 
 update_chrony() {
-
+  true
 }
 
 post_update_chrony() {
-
+  true
 }
 
 pre_remove_chrony() {
-
+  true
 }
 
 remove_chrony() {
-
+  true
 }
 
 post_remove_chrony() {
-
+  true
 }
 
 register_event_handler "configure" "configure_chrony"
@@ -117,4 +121,4 @@ register_event_handler "pre_remove" "pre_remove_chrony"
 register_event_handler "remove" "remove_chrony"
 register_event_handler "post_remove" "post_remove_chrony"
 
-installer_run $@
+installer_run "$@"
