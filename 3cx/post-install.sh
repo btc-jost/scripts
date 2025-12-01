@@ -3,12 +3,14 @@
 # Post-installation script for 3CX on Debian
 
 # Install Zabbix repository
-wget https://repo.zabbix.com/zabbix/7.4/release/debian/pool/main/z/zabbix-release/zabbix-release_latest_7.4+debian12_all.deb
-dpkg -i zabbix-release_latest_7.4+debian12_all.deb
+# shellcheck disable=SC1091
+. /etc/os-release
+wget "https://repo.zabbix.com/zabbix/7.4/release/debian/pool/main/z/zabbix-release/zabbix-release_latest+debian${VERSION_ID}_all.deb"
+dpkg -i "zabbix-release_latest+debian${VERSION_ID}_all.deb"
 apt update
 
 # Clean up
-rm zabbix-release_latest_7.4+debian12_all.deb
+rm "zabbix-release_latest+debian${VERSION_ID}_all.deb"
 
 # Install Zabbix agent 2
 apt install zabbix-agent2 -y
@@ -17,9 +19,8 @@ apt install zabbix-agent2 -y
 echo -e 'Server=192.168.72.5\nServerActive=192.168.72.5\nHostname=' > /etc/zabbix/zabbix_agent2.d/smart_monitoring.conf
 
 # Enable and start Zabbix agent 2 service
-systemctl stop zabbix-agent2
 systemctl enable zabbix-agent2
-systemctl start zabbix-agent2
+systemctl restart zabbix-agent2
 
 # Install chrony for time synchronization
 apt install chrony -y
