@@ -11,3 +11,13 @@ Run the following command in a root shell:
 ```
 wget -O - https://raw.githubusercontent.com/btc-jost/scripts/main/3cx/post-install.sh | bash
 ```
+
+## SmartMonitoring Proxy
+
+Install script to be executed to install a SmartMonitoring Proxy on Ubuntu/Debian host.
+
+Run the following command in a root shell:
+
+```bash
+wget -O - https://raw.githubusercontent.com/btc-jost/scripts/main/zabbix/install-sm-proxy.sh | bash
+```
