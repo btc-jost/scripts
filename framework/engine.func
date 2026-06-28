@@ -88,39 +88,34 @@ run_event() {
 # Built-in default handlers (orchestrated by installer_run, not registered)
 # ==============================================================================
 
-_install_packages() {
+# _apt_packages <action> - install or upgrade the whole APP_PACKAGES collection in
+# one batched apt run. <action> is "install" (apt-get install -y) or "upgrade"
+# (apt-get install --only-upgrade -y). No-op when nothing was added.
+_apt_packages() {
+  local action="$1"
   [[ ${#APP_PACKAGES[@]} -eq 0 ]] && return 0
+
+  local gerund past flags
+  case "$action" in
+    install) gerund="Installing" past="Installed" flags=(-y) ;;
+    upgrade) gerund="Upgrading" past="Upgraded" flags=(--only-upgrade -y) ;;
+    *) msg_error "Unknown apt action: ${action}"; return 1 ;;
+  esac
 
   msg_info "Updating package lists"
   $STD apt-get update || true
   msg_ok "Updated package lists"
 
-  msg_info "Installing packages: ${APP_PACKAGES[*]}"
-  if _install_packages_with_retry "${APP_PACKAGES[@]}"; then
-    msg_ok "Installed packages: ${APP_PACKAGES[*]}"
+  msg_info "${gerund} packages: ${APP_PACKAGES[*]}"
+  if _apt_install_with_retry "${flags[@]}"; then
+    msg_ok "${past} packages: ${APP_PACKAGES[*]}"
   else
-    msg_error "Failed to install packages: ${APP_PACKAGES[*]}"
+    msg_error "Failed to ${action} packages: ${APP_PACKAGES[*]}"
     return 1
   fi
 }
 
-_upgrade_packages() {
-  [[ ${#APP_PACKAGES[@]} -eq 0 ]] && return 0
-
-  msg_info "Updating package lists"
-  $STD apt-get update || true
-  msg_ok "Updated package lists"
-
-  msg_info "Upgrading packages: ${APP_PACKAGES[*]}"
-  if _upgrade_packages_with_retry "${APP_PACKAGES[@]}"; then
-    msg_ok "Upgraded packages: ${APP_PACKAGES[*]}"
-  else
-    msg_error "Failed to upgrade packages: ${APP_PACKAGES[*]}"
-    return 1
-  fi
-}
-
-_enable_service() {
+_enable_services() {
   [[ ${#APP_SERVICES[@]} -eq 0 ]] && return 0
   msg_info "Enabling services: ${APP_SERVICES[*]}"
   $STD systemctl enable "${APP_SERVICES[@]}" || true
@@ -128,10 +123,12 @@ _enable_service() {
   msg_ok "Enabled services: ${APP_SERVICES[*]}"
 }
 
-_disable_service() {
+_disable_services() {
   [[ ${#APP_SERVICES[@]} -eq 0 ]] && return 0
   msg_info "Disabling services: ${APP_SERVICES[*]}"
-  $STD systemctl disable --now "${APP_SERVICES[@]}" || true
+  # Mirror of _enable_services (enable -> start): stop first, then disable.
+  $STD systemctl stop "${APP_SERVICES[@]}" || true
+  $STD systemctl disable "${APP_SERVICES[@]}" || true
   msg_ok "Disabled services: ${APP_SERVICES[*]}"
 }
 
@@ -144,35 +141,19 @@ _purge_packages() {
 }
 
 # ------------------------------------------------------------------------------
-# apt install/upgrade with retry. Output is routed through $STD (silent + log).
+# apt-get install <flags> APP_PACKAGES, retried. Output routed through $STD
+# (silent + log). Caller supplies the verb flags (-y, or --only-upgrade -y).
 # ------------------------------------------------------------------------------
-_install_packages_with_retry() {
-  local packages=("$@")
+_apt_install_with_retry() {
+  local flags=("$@")
   local max_retries=2 retry=0
   while [[ $retry -le $max_retries ]]; do
-    if $STD apt-get install -y "${packages[@]}"; then
+    if $STD apt-get install "${flags[@]}" "${APP_PACKAGES[@]}"; then
       return 0
     fi
     retry=$((retry + 1))
     if [[ $retry -le $max_retries ]]; then
-      msg_warn "Package installation failed, retrying ($retry/$max_retries)..."
-      sleep 2
-      $STD apt-get update || true
-    fi
-  done
-  return 1
-}
-
-_upgrade_packages_with_retry() {
-  local packages=("$@")
-  local max_retries=2 retry=0
-  while [[ $retry -le $max_retries ]]; do
-    if $STD apt-get install --only-upgrade -y "${packages[@]}"; then
-      return 0
-    fi
-    retry=$((retry + 1))
-    if [[ $retry -le $max_retries ]]; then
-      msg_warn "Package upgrade failed, retrying ($retry/$max_retries)..."
+      msg_warn "apt-get install failed, retrying ($retry/$max_retries)..."
       sleep 2
       $STD apt-get update || true
     fi
@@ -205,22 +186,22 @@ installer_run() {
       run_questions # built-in: ask declared questions (omitting preset ones)
       run_event pre_install
       run_event install
-      _install_packages # built-in: one apt install of the whole collection
+      _apt_packages install # built-in: one apt install of the whole collection
       run_event post_install
-      _enable_service # built-in: one grouped enable/restart of all services
+      _enable_services # built-in: one grouped enable/restart of all services
       ;;
     update)
       run_event configure
       run_questions
       run_event pre_update
       run_event update
-      _upgrade_packages
+      _apt_packages upgrade
       run_event post_update
-      _enable_service
+      _enable_services
       ;;
     remove)
       run_event pre_remove
-      _disable_service
+      _disable_services
       run_event remove
       _purge_packages
       run_event post_remove

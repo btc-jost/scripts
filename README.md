@@ -21,7 +21,9 @@ Licensed under GPL-3.0 (see [`LICENSE`](LICENSE)).
 - A **Debian or Ubuntu** host (scripts use `apt` and read `/etc/os-release`).
 - **Bash** as the running shell, executed **as root**.
 - `wget` (used both to fetch the scripts and inside them).
-- `whiptail` for the interactive scripts (`zabbix/install-sm-proxy.sh`, `component/chrony.sh`).
+- `whiptail` for the interactive component/composite scripts (any that prompt, e.g.
+  `zabbix/install-sm-proxy.sh`, `component/chrony.sh`, `component/zabbix-agent2.sh`,
+  `component/zabbix-proxy.sh`). Unattended runs (`UNATTENDED=yes`) skip the prompts.
 
 ## Usage
 

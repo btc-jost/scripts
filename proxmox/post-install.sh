@@ -31,13 +31,9 @@ CHRONY__SOURCE="${CHRONY__SOURCE:-swiss}"
 
 include_component zabbix-agent2
 include_component chrony
+# unattended-upgrades is installed in the batched apt run and enabled/restarted by
+# the engine's grouped service step - no dedicated handler needed.
 add_packages unattended-upgrades
-register_event_handler post_install proxmox_post_install
-
-proxmox_post_install() {
-  msg_info "Enabling unattended-upgrades"
-  $STD systemctl enable --now unattended-upgrades || true
-  msg_ok "Enabled unattended-upgrades"
-}
+add_services unattended-upgrades
 
 installer_run "$@"

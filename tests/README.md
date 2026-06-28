@@ -79,11 +79,12 @@ for linting (`apt-get install -y shellcheck`).
    - Swiss NTP configured; PSK printed at the end; `zabbix-agent2` + `zabbix-proxy` restarted together.
 5. **`3cx/post-install.sh install`** — composite including agent2 + chrony at repo **7.4**; verify the
    single batched install of `zabbix-agent2 chrony` and the Swiss NTP pool from the chrony component.
-6. **`proxmox/post-install.sh install`** — chrony + unattended-upgrades installed; `unattended-upgrades`
-   enabled.
+6. **`proxmox/post-install.sh install`** — agent2 + chrony + unattended-upgrades installed, all three
+   enabled/restarted in one grouped step. Note: this composite does **not** pin `ZABBIX_AGENT2__SERVER`,
+   so it prompts for the server interactively; an unattended run must pass `ZABBIX_AGENT2__SERVER=…`.
 
 Verify `update` and `remove` modes on at least chrony and the composite (remove → grouped
-`systemctl disable --now` + `apt purge`).
+`systemctl stop` + `systemctl disable` + `apt purge`).
 
 ## Known follow-ups / decisions pending
 

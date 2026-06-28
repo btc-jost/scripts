@@ -74,11 +74,11 @@ icons() {
 
 # ------------------------------------------------------------------------------
 # set_std_mode() - decide whether commands run loudly or quietly.
-# VERBOSE=yes  -> STD=""       (run command directly, show all output)
-# otherwise    -> STD="silent" (run through silent() which logs + hides output)
+# Verbose (see is_verbose_mode) -> STD=""       (run command directly, show output)
+# otherwise                     -> STD="silent" (run via silent(): log + hide output)
 # ------------------------------------------------------------------------------
 set_std_mode() {
-  if [[ "${VERBOSE:-no}" == "yes" ]]; then
+  if is_verbose_mode; then
     STD=""
   else
     STD="silent"
@@ -132,11 +132,13 @@ msg_warn() {
 
 # ------------------------------------------------------------------------------
 # is_verbose_mode() / is_unattended()
-# Helpers used by the prompt registry to decide between interactive prompts and
-# silent default-driven runs.
+# is_verbose_mode is consumed by set_std_mode to choose loud vs silent command
+# execution; is_unattended is used by the prompt registry to decide between
+# interactive prompts and silent default-driven runs. Both accept the same set of
+# truthy values for a single, consistent convention.
 # ------------------------------------------------------------------------------
 is_verbose_mode() {
-  [[ "${VERBOSE:-no}" != "no" ]]
+  [[ "${VERBOSE:-no}" =~ ^(yes|true|1)$ ]]
 }
 
 is_unattended() {
