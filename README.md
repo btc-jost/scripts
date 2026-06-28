@@ -43,6 +43,9 @@ install and one grouped service restart).
 
 Zabbix agent 2 (→ `192.168.72.5`) + chrony (Swiss NTP pool) for a fresh 3CX server; Zabbix repo 7.4.
 
+Variables: everything is pinned by default — override `ZABBIX_AGENT2__SERVER` (default `192.168.72.5`),
+`ZABBIX_VERSION` (`7.4`) or `CHRONY__SOURCE` (`swiss`) if needed. See [Core variables](#core-variables).
+
 Install:
 
 ```bash
@@ -69,6 +72,10 @@ for a **customer name** and **location** (alphanumeric); the proxy hostname beco
 present), points the proxy at `monitoring.smartcollab.ch`, and prints the hostname and PSK at the end
 so they can be registered on the Zabbix server.
 
+Variables: `SM_PROXY__CUSTOMER` and `SM_PROXY__LOCATION` (asked interactively; set both for unattended
+runs). Override `ZABBIX_PROXY__SERVER` (default `monitoring.smartcollab.ch`) or `ZABBIX_VERSION`
+(`7.0`) if needed. See [Core variables](#core-variables).
+
 Install:
 
 ```bash
@@ -90,6 +97,9 @@ bash -c "$(wget -O - https://raw.githubusercontent.com/btc-jost/scripts/main/zab
 #### `proxmox/post-install.sh`
 
 Zabbix agent 2 + chrony (Swiss NTP) + `unattended-upgrades` for a Proxmox host; Zabbix repo 7.0.
+
+Variables: `ZABBIX_AGENT2__SERVER` is **required** (prompted, or set it for unattended runs). Override
+`ZABBIX_VERSION` (`7.0`) or `CHRONY__SOURCE` (`swiss`) if needed. See [Core variables](#core-variables).
 
 Install:
 
@@ -118,6 +128,9 @@ composite with `include_component`.
 
 chrony with a menu to pick the Swiss NTP pool or enter custom servers.
 
+Variables: `CHRONY__SOURCE` (`swiss` default, or `custom`); with `custom`, enter servers interactively.
+See [Core variables](#core-variables).
+
 Install:
 
 ```bash
@@ -140,6 +153,9 @@ bash -c "$(wget -O - https://raw.githubusercontent.com/btc-jost/scripts/main/com
 
 `zabbix-agent2`; prompts for the Zabbix server address and agent hostname.
 
+Variables: `ZABBIX_AGENT2__SERVER` (**required**), `ZABBIX_AGENT2__HOSTNAME` (default: the machine
+hostname), `ZABBIX_VERSION` (default `7.4`). See [Core variables](#core-variables).
+
 Install:
 
 ```bash
@@ -161,6 +177,9 @@ bash -c "$(wget -O - https://raw.githubusercontent.com/btc-jost/scripts/main/com
 #### `component/zabbix-proxy.sh`
 
 `zabbix-proxy-sqlite3`; prompts for the Zabbix server address and proxy hostname.
+
+Variables: `ZABBIX_PROXY__SERVER` (**required**), `ZABBIX_PROXY__HOSTNAME` (default: the machine
+hostname), `ZABBIX_VERSION` (default `7.4`). See [Core variables](#core-variables).
 
 Install:
 
@@ -189,6 +208,22 @@ bash -c "$(wget -O - https://raw.githubusercontent.com/btc-jost/scripts/main/com
 | `*/*.sh` | Composite installers — one per top-level folder (`3cx/`, `zabbix/`, `proxmox/`); see [Usage](#usage). |
 | `component/*.sh` | Reusable component installers (chrony, Zabbix agent 2, Zabbix proxy) built on the framework; see [Usage](#usage). |
 | `framework/*.func` | Sourced Bash libraries: an event-driven installer mini-framework. |
+
+### Core variables
+
+Environment variables read by the framework. Set them before the command, e.g.
+`UNATTENDED=yes ZABBIX_AGENT2__SERVER=192.168.72.5 bash -c "$(wget …)"`. Per-script config variables
+are listed with each script under [Usage](#usage).
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `UNATTENDED` | `no` | `yes`/`true`/`1` skips all prompts and uses the declared defaults. |
+| `VERBOSE` | `no` | `yes`/`true`/`1` shows all command output; otherwise commands run quietly and are logged to `LOGFILE`. |
+| `WIZARD_VERBOSE_PROMPT` | `yes` | Set `no` to drop the built-in "Verbose mode" wizard step. |
+| `WIZARD_REVIEW` | `yes` | Set `no` to drop the summary/confirm wizard page. |
+| `LOGFILE` | `/tmp/btc-helper-<timestamp>.log` | Where quiet command output is logged. |
+| `ZABBIX_VERSION` | per script (`7.0` / `7.4`) | Zabbix repo version used by `setup_zabbix_repo`. |
+| `FUNC_BASE_URL` | `…/btc-jost/scripts/main` | Base URL the scripts source `framework/*.func` from; point it at a branch to test it (see [Usage](#usage)). |
 
 ### Framework and component installers
 
@@ -233,8 +268,3 @@ chrony` (presetting `CHRONY__SOURCE=swiss` to skip the prompt).
 - **Track installed packages for safe removal** — on `install`, detect which requested packages are
   already present and record the ones this run actually installed to a state file; on `remove`, purge
   only those (leave pre-existing packages untouched).
-- **Document the core/framework variables** — list the variables the framework reads (e.g. `VERBOSE`,
-  `UNATTENDED`, `FUNC_BASE_URL`, `LOGFILE`, `ZABBIX_VERSION`, `WIZARD_REVIEW`, `WIZARD_VERBOSE_PROMPT`)
-  and how to use them.
-- **Document each script's variables in Usage** — list the per-script config variables (the
-  `<MODULE>__<NAME>` question/contract vars) so they can be preset for unattended runs.
