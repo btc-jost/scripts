@@ -2,7 +2,7 @@
 
 A collection of Bash provisioning and post-install scripts for btc.jost AG infrastructure. They
 bootstrap monitoring, time synchronization and telephony servers on Debian/Ubuntu hosts and
-Proxmox/LXC containers. Most are designed to be piped straight into a root shell from GitHub.
+Proxmox/LXC containers. Most are designed to be run straight from GitHub in a root shell.
 
 Licensed under GPL-3.0 (see [`LICENSE`](LICENSE)).
 
@@ -27,32 +27,64 @@ Licensed under GPL-3.0 (see [`LICENSE`](LICENSE)).
 
 ## Usage
 
-### 3CX
+Run every script **as root** on a Debian/Ubuntu host, fetched straight from GitHub.
+Using `bash -c "$(wget …)"` keeps stdin on your terminal so the `whiptail` wizard works.
+The default action is **install**; pass `update` or `remove` as an argument after `--`.
+Replace `<path>` with one of the scripts from the [Composites](#composites) or
+[Components](#components) tables below.
 
-Post install script to be executed after a fresh 3CX installation on Debian.
-Run the following command in a root shell:
-
-```bash
-wget -O - https://raw.githubusercontent.com/btc-jost/scripts/main/3cx/post-install.sh | bash
-```
-
-This adds the Zabbix repository, installs and configures `zabbix-agent2` (pointed at the
-SmartMonitoring server), and installs chrony with the Swiss NTP pool.
-
-### SmartMonitoring Proxy
-
-Install script to provision a SmartMonitoring proxy on an Ubuntu/Debian host.
-Run the following command in a root shell:
+Install (default):
 
 ```bash
-wget -O - https://raw.githubusercontent.com/btc-jost/scripts/main/zabbix/install-sm-proxy.sh | bash
+bash -c "$(wget -O - https://raw.githubusercontent.com/btc-jost/scripts/main/<path>)"
 ```
 
-A `whiptail` wizard prompts for a **customer name** and **location** (alphanumeric only); the proxy
-hostname is built as `<customer>-proxy-<location>`. The script then installs `zabbix-proxy-sqlite3`,
-`zabbix-agent2` and `chrony`, generates a 256-byte PSK at `/etc/zabbix/psk.key` (reused if present),
-configures the proxy against `monitoring.smartcollab.ch`, and prints the hostname and PSK at the end so
-they can be registered on the Zabbix server.
+Update:
+
+```bash
+bash -c "$(wget -O - https://raw.githubusercontent.com/btc-jost/scripts/main/<path>)" -- update
+```
+
+Remove:
+
+```bash
+bash -c "$(wget -O - https://raw.githubusercontent.com/btc-jost/scripts/main/<path>)" -- remove
+```
+
+Set `UNATTENDED=yes` to take the declared defaults without prompting, and `VERBOSE=yes`
+to show all command output. Interactive runs need `whiptail`:
+
+```bash
+apt-get install -y whiptail
+```
+
+### Composites
+
+Top-level installers that compose several components into one lifecycle (a single
+batched `apt` install and one grouped service restart).
+
+| Path | Installs / configures |
+| --- | --- |
+| `3cx/post-install.sh` | Post-install for a fresh 3CX server: `zabbix-agent2` (→ `192.168.72.5`) + chrony (Swiss NTP pool), Zabbix repo 7.4. |
+| `zabbix/install-sm-proxy.sh` | SmartMonitoring proxy (Zabbix 7.0): `zabbix-proxy-sqlite3` + `zabbix-agent2` + chrony, with a customer/location wizard, PSK and Swiss NTP. |
+| `proxmox/post-install.sh` | Proxmox host post-install: `zabbix-agent2` + chrony (Swiss NTP) + `unattended-upgrades`, Zabbix repo 7.0. |
+
+**SmartMonitoring Proxy** — the wizard asks for a **customer name** and **location**
+(alphanumeric only); the proxy hostname is built as `<customer>-proxy-<location>`. It
+generates a 256-byte PSK at `/etc/zabbix/psk.key` (reused if present), points the proxy
+at `monitoring.smartcollab.ch`, and prints the hostname and PSK at the end so they can
+be registered on the Zabbix server.
+
+### Components
+
+Reusable single-purpose units. Run them standalone with the commands above, or pull
+them into a composite with `include_component`.
+
+| Path | Installs / configures |
+| --- | --- |
+| `component/chrony.sh` | chrony; menu to pick the Swiss NTP pool or enter custom servers. |
+| `component/zabbix-agent2.sh` | `zabbix-agent2`; prompts for the Zabbix server address and agent hostname. |
+| `component/zabbix-proxy.sh` | `zabbix-proxy-sqlite3`; prompts for the Zabbix server address and proxy hostname. |
 
 ## Framework and component installers
 

@@ -78,15 +78,18 @@ Libs are sourced from `${FUNC_BASE_URL:-…/main}/framework/*.func` and carry lo
 
 ## How to run
 
-Standalone scripts are meant to be piped into a root shell from GitHub raw, e.g.:
+Standalone scripts are meant to be run in a root shell from GitHub raw via
+`bash -c "$(wget …)"` (keeps stdin on the terminal so the wizard works), e.g.:
 ```bash
-wget -O - https://raw.githubusercontent.com/btc-jost/scripts/main/3cx/post-install.sh | bash
-wget -O - https://raw.githubusercontent.com/btc-jost/scripts/main/zabbix/install-sm-proxy.sh | bash
+bash -c "$(wget -O - https://raw.githubusercontent.com/btc-jost/scripts/main/3cx/post-install.sh)"
+bash -c "$(wget -O - https://raw.githubusercontent.com/btc-jost/scripts/main/zabbix/install-sm-proxy.sh)"
 ```
 - **Bash only** (not POSIX sh) — `core.func`'s `shell_check` enforces it. Run **as root** (`root_check`).
 - Targets **Debian/Ubuntu** (`apt`, reads `/etc/os-release`). Interactive scripts need `whiptail`;
   set `UNATTENDED=yes` to skip prompts and use declared defaults.
-- Framework components take a mode argument: `… | bash -s install` (default), `update`, or `remove`.
+- Framework components take a mode argument: install (default), `update`, or `remove`, passed after
+  `--`, e.g. `bash -c "$(wget -O - …/3cx/post-install.sh)" -- update`. (The legacy `… | bash -s update`
+  pipe form also works but consumes stdin.)
 - Libs are sourced from `${FUNC_BASE_URL:-…/main}/framework/*.func`. To test an unmerged branch,
   export `FUNC_BASE_URL=…/<branch>`; locally, pre-source the `framework/*.func` files (load guards
   make the remote `source` lines no-ops) — see the harness pattern used during development.
