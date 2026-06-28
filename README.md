@@ -227,3 +227,14 @@ chrony` (presetting `CHRONY__SOURCE=swiss` to skip the prompt).
 - Scripts are linted with **shellcheck**; recommended VS Code extensions are listed in
   `.vscode/extensions.json`.
 - Every script carries the standard GPL-3.0 header.
+
+## TODO
+
+- **Track installed packages for safe removal** — on `install`, detect which requested packages are
+  already present and record the ones this run actually installed to a state file; on `remove`, purge
+  only those (leave pre-existing packages untouched).
+- **Document the core/framework variables** — list the variables the framework reads (e.g. `VERBOSE`,
+  `UNATTENDED`, `FUNC_BASE_URL`, `LOGFILE`, `ZABBIX_VERSION`, `WIZARD_REVIEW`, `WIZARD_VERBOSE_PROMPT`)
+  and how to use them.
+- **Document each script's variables in Usage** — list the per-script config variables (the
+  `<MODULE>__<NAME>` question/contract vars) so they can be preset for unattended runs.
