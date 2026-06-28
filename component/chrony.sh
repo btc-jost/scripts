@@ -2,8 +2,8 @@
 #
 # btc Helper Scripts - Chrony Installation Script
 #
-# Copyright (C) 2025  btc.jost AG
-# Copyright (C) 2025  Simon Gilli
+# Copyright (C) 2025-2026  btc.jost AG
+# Copyright (C) 2025-2026  Simon Gilli
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -20,27 +20,24 @@
 
 FUNC_BASE_URL="${FUNC_BASE_URL:-https://raw.githubusercontent.com/btc-jost/scripts/main}"
 # shellcheck disable=SC1090
-[[ -n "${_INSTALLER_FUNC_LOADED:-}" ]] || source <(wget -qO- "${FUNC_BASE_URL}/framework/installer.func")
+[[ -n "${_COMPONENT_FUNC_LOADED:-}" ]] || source <(wget -qO- "${FUNC_BASE_URL}/framework/component.func")
 
-_CHRONY_NTP_FILE="${_CHRONY_NTP_FILE:-/etc/chrony/sources.d/pool-ntp-org.sources}"
+_CHRONY__NTP_FILE="${_CHRONY__NTP_FILE:-/etc/chrony/sources.d/pool-ntp-org.sources}"
 
-# Reusable unit: opt this component in by calling chrony_register.
-chrony_register() {
-  add_packages chrony
-  add_service chronyd
-  register_question NTP_SOURCE menu "Select the NTP time source" default=swiss \
-    "swiss=Swiss NTP server pool" \
-    "custom=User defined servers"
-  register_question NTP_CUSTOM input_list "Enter an NTP server (leave empty to finish)" \
-    when=NTP_SOURCE=custom
-  register_event_handler post_install chrony_post_install
-}
+add_packages chrony
+add_services chronyd
+register_question CHRONY__SOURCE menu "Select the NTP time source" default=swiss \
+  "swiss=Swiss NTP server pool" \
+  "custom=User defined servers"
+register_question CHRONY__CUSTOM input_list "Enter an NTP server (leave empty to finish)" \
+  when=CHRONY__SOURCE=custom
+register_event_handler post_install chrony_post_install
 
 chrony_post_install() {
   local sources=()
-  if [[ "${NTP_SOURCE:-swiss}" == "custom" && ${#NTP_CUSTOM[@]} -gt 0 ]]; then
+  if [[ "${CHRONY__SOURCE:-swiss}" == "custom" && ${#CHRONY__CUSTOM[@]} -gt 0 ]]; then
     local s
-    for s in "${NTP_CUSTOM[@]}"; do
+    for s in "${CHRONY__CUSTOM[@]}"; do
       sources+=("server ${s} iburst")
     done
   else
@@ -53,15 +50,10 @@ chrony_post_install() {
   fi
 
   msg_info "Configuring NTP sources"
-  mkdir -p "$(dirname "$_CHRONY_NTP_FILE")"
-  printf '%s\n' "${sources[@]}" >"$_CHRONY_NTP_FILE"
+  mkdir -p "$(dirname "$_CHRONY__NTP_FILE")"
+  printf '%s\n' "${sources[@]}" >"$_CHRONY__NTP_FILE"
   $STD chronyc reload sources || true
   msg_ok "Configured NTP sources"
 }
 
-# Standalone entrypoint (skipped when included via include_installer).
-if [[ -z "${_COMPOSING:-}" ]]; then
-  APP="${APP:-Chrony}"
-  chrony_register
-  installer_run "$@"
-fi
+installer_run "$@"

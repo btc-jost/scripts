@@ -1,9 +1,10 @@
 # shellcheck shell=bash
+# shellcheck disable=SC2034  # palette/contract vars are consumed by sibling .func files and sourcing scripts
 #
 # btc Helper Scripts - Core Functions
 #
-# Copyright (C) 2025  btc.jost AG
-# Copyright (C) 2025  Simon Gilli
+# Copyright (C) 2025-2026  btc.jost AG
+# Copyright (C) 2025-2026  Simon Gilli
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -18,8 +19,8 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-# Load-once guard: this file may be sourced multiple times (e.g. installer.func
-# and a component script both pull it in). Sourcing it again is a no-op.
+# Load-once guard: this file may be sourced multiple times (e.g. engine.func and
+# a component script both pull it in). Sourcing it again is a no-op.
 [[ -n "${_CORE_FUNC_LOADED:-}" ]] && return
 _CORE_FUNC_LOADED=1
 

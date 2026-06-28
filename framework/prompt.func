@@ -2,8 +2,8 @@
 #
 # btc Helper Scripts - Declarative Prompt Functions
 #
-# Copyright (C) 2025  btc.jost AG
-# Copyright (C) 2025  Simon Gilli
+# Copyright (C) 2025-2026  btc.jost AG
+# Copyright (C) 2025-2026  Simon Gilli
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -32,6 +32,11 @@ FUNC_BASE_URL="${FUNC_BASE_URL:-https://raw.githubusercontent.com/btc-jost/scrip
 # A component declares the input it needs; the core runs the wizard and stores
 # each answer into a global variable named by the question KEY. The component
 # never writes whiptail calls - it reads $KEY later (e.g. in post_install).
+#
+# A question whose KEY variable is ALREADY set (non-empty) when the wizard runs
+# is omitted - the preset value is kept. This is how a composite suppresses a
+# component's question (set the var before include_component) and how a
+# `configure` handler can pre-answer steps.
 #
 # register_question <KEY> <type> <prompt> [opt]...
 #   type:
@@ -86,6 +91,15 @@ _q_parse_opts() {
       *=*) _OPT_MENU+=("$tok") ;;
     esac
   done
+}
+
+# Internal: is question $1's answer already provided (preset before the wizard)?
+# A non-empty scalar var means "omit this question, keep the value". input_list
+# answers are array-typed and are not auto-skipped this way.
+_q_already_set() {
+  local key="${_Q_KEYS[$1]}"
+  [[ "${_Q_TYPES[$1]}" == "input_list" ]] && return 1
+  [[ -n "${!key:-}" ]]
 }
 
 # Internal: is question $1 applicable given previously collected answers?
@@ -240,17 +254,30 @@ run_questions() {
 
   if is_unattended || ! command -v whiptail >/dev/null 2>&1; then
     local i
-    for ((i = 0; i < n; i++)); do _q_apply_default "$i"; done
+    for ((i = 0; i < n; i++)); do
+      if ! _q_condition_met "$i"; then
+        _q_clear_answer "$i"
+      elif ! _q_already_set "$i"; then
+        _q_apply_default "$i"
+      fi
+    done
     return 0
   fi
 
   tput smcup 2>/dev/null || true
   local i=0 dir=1
   while ((i >= 0 && i < n)); do
+    # Skip questions that don't apply or are already answered. When stepping
+    # back over them, bounce forward at the start rather than loop.
     if ! _q_condition_met "$i"; then
       _q_clear_answer "$i"
       i=$((i + dir))
-      ((i < 0)) && i=0
+      ((i < 0)) && { i=0; dir=1; }
+      continue
+    fi
+    if _q_already_set "$i"; then
+      i=$((i + dir))
+      ((i < 0)) && { i=0; dir=1; }
       continue
     fi
     if _q_ask "$i" "$((i + 1))" "$n"; then

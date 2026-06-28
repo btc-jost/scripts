@@ -1,0 +1,54 @@
+# shellcheck shell=bash
+#
+# btc Helper Scripts - Composite Entry Point
+#
+# Copyright (C) 2025-2026  btc.jost AG
+# Copyright (C) 2025-2026  Simon Gilli
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+# Entry point sourced by the top-level composite scripts (3cx/, proxmox/,
+# zabbix/). It pulls in the core utilities, the installer engine and the question
+# wizard, and adds include_component so a composite can pull reusable units from
+# component/ into one combined run.
+
+[[ -n "${_COMPOSITE_FUNC_LOADED:-}" ]] && return
+_COMPOSITE_FUNC_LOADED=1
+
+FUNC_BASE_URL="${FUNC_BASE_URL:-https://raw.githubusercontent.com/btc-jost/scripts/main}"
+# shellcheck disable=SC1090
+[[ -n "${_CORE_FUNC_LOADED:-}" ]] || source <(wget -qO- "${FUNC_BASE_URL}/framework/core.func")
+# shellcheck disable=SC1090
+[[ -n "${_ENGINE_FUNC_LOADED:-}" ]] || source <(wget -qO- "${FUNC_BASE_URL}/framework/engine.func")
+# shellcheck disable=SC1090
+[[ -n "${_PROMPT_FUNC_LOADED:-}" ]] || source <(wget -qO- "${FUNC_BASE_URL}/framework/prompt.func")
+
+# ------------------------------------------------------------------------------
+# include_component <slug> - pull a reusable component in as part of this run.
+# Sources it in "compose mode" (_COMPOSING set, scoped to this call) so the
+# component's top-level registrations run while its trailing installer_run is a
+# no-op. The component's contract vars must be set BEFORE this call, since the
+# component reads them at source time.
+# Set COMPONENT_LOCAL_DIR to source from a local checkout (used for testing).
+# ------------------------------------------------------------------------------
+include_component() {
+  local _COMPOSING=1 slug="$1"
+  if [[ -n "${COMPONENT_LOCAL_DIR:-}" && -f "${COMPONENT_LOCAL_DIR}/${slug}.sh" ]]; then
+    # shellcheck disable=SC1090
+    source "${COMPONENT_LOCAL_DIR}/${slug}.sh"
+  else
+    # shellcheck disable=SC1090
+    source <(wget -qO- "${FUNC_BASE_URL}/component/${slug}.sh")
+  fi
+}

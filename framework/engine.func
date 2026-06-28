@@ -1,9 +1,9 @@
 # shellcheck shell=bash
 #
-# btc Helper Scripts - Installer Functions
+# btc Helper Scripts - Installer Engine
 #
-# Copyright (C) 2025  btc.jost AG
-# Copyright (C) 2025  Simon Gilli
+# Copyright (C) 2025-2026  btc.jost AG
+# Copyright (C) 2025-2026  Simon Gilli
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -18,8 +18,8 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-[[ -n "${_INSTALLER_FUNC_LOADED:-}" ]] && return
-_INSTALLER_FUNC_LOADED=1
+[[ -n "${_ENGINE_FUNC_LOADED:-}" ]] && return
+_ENGINE_FUNC_LOADED=1
 
 # Base URL for sourcing sibling libs. Defaults to main; override with
 # FUNC_BASE_URL=.../<branch> to test an unmerged branch. The load-once guards
@@ -28,10 +28,6 @@ FUNC_BASE_URL="${FUNC_BASE_URL:-https://raw.githubusercontent.com/btc-jost/scrip
 
 # shellcheck disable=SC1090
 [[ -n "${_CORE_FUNC_LOADED:-}" ]] || source <(wget -qO- "${FUNC_BASE_URL}/framework/core.func")
-# shellcheck disable=SC1090
-[[ -n "${_PROMPT_FUNC_LOADED:-}" ]] || source <(wget -qO- "${FUNC_BASE_URL}/framework/prompt.func")
-# shellcheck disable=SC1090
-[[ -n "${_TOOLS_FUNC_LOADED:-}" ]] || source <(wget -qO- "${FUNC_BASE_URL}/framework/tools.func")
 
 # ==============================================================================
 # Shared collections and event registry
@@ -39,7 +35,7 @@ FUNC_BASE_URL="${FUNC_BASE_URL:-https://raw.githubusercontent.com/btc-jost/scrip
 #
 # A run accumulates ONE package collection and ONE service collection, however
 # many components take part. Components never assign these arrays - they only
-# enhance them via add_packages / add_service. The core then does the heavy work
+# enhance them via add_packages / add_services. The core then does the heavy work
 # once: a single apt install, a single grouped service enable/restart.
 #
 # variables_init() runs at source time, before any component registers handlers
@@ -63,8 +59,8 @@ add_packages() {
   APP_PACKAGES+=("$@")
 }
 
-# add_service <svc>... - enhance the shared service collection.
-add_service() {
+# add_services <svc>... - enhance the shared service collection.
+add_services() {
   APP_SERVICES+=("$@")
 }
 
@@ -86,24 +82,6 @@ run_event() {
   for handler in ${_EVENT_HANDLERS["$event"]:-}; do
     "$handler"
   done
-}
-
-# ------------------------------------------------------------------------------
-# include_installer <slug> - pull another installer in as a reusable unit.
-# Sources it in "compose mode" (_COMPOSING set) so its standalone entry does NOT
-# run; only its <slug>_register() and handler functions get defined. The caller
-# then opts the component in by calling <slug>_register.
-# Set INSTALLER_LOCAL_DIR to source from a local checkout (used for testing).
-# ------------------------------------------------------------------------------
-include_installer() {
-  local _COMPOSING=1 slug="$1"
-  if [[ -n "${INSTALLER_LOCAL_DIR:-}" && -f "${INSTALLER_LOCAL_DIR}/${slug}.sh" ]]; then
-    # shellcheck disable=SC1090
-    source "${INSTALLER_LOCAL_DIR}/${slug}.sh"
-  else
-    # shellcheck disable=SC1090
-    source <(wget -qO- "${FUNC_BASE_URL}/installer/${slug}.sh")
-  fi
 }
 
 # ==============================================================================
@@ -208,7 +186,13 @@ _upgrade_packages_with_retry() {
 # Usage (after all components are registered): installer_run "$@"
 # The core sequences the built-in steps (questions, one batched install, grouped
 # service enable) around every component's registered event handlers.
+#
+# When sourced under composition (_COMPOSING set by include_component), this is a
+# no-op: the component's registrations already ran at source time, and the
+# composite's own installer_run drives the combined lifecycle.
 installer_run() {
+  [[ -n "${_COMPOSING:-}" ]] && return 0
+
   MODE="${1:-install}" # install | update | remove
 
   load_functions
@@ -217,8 +201,8 @@ installer_run() {
 
   case "$MODE" in
     install)
-      run_questions # built-in: ask declared questions, store answers
-      run_event configure
+      run_event configure # handlers may pre-answer questions before the wizard
+      run_questions # built-in: ask declared questions (omitting preset ones)
       run_event pre_install
       run_event install
       _install_packages # built-in: one apt install of the whole collection
@@ -226,8 +210,8 @@ installer_run() {
       _enable_service # built-in: one grouped enable/restart of all services
       ;;
     update)
-      run_questions
       run_event configure
+      run_questions
       run_event pre_update
       run_event update
       _upgrade_packages

@@ -13,50 +13,63 @@ Standalone scripts (each runnable on its own):
   Zabbix repo, installs + configures `zabbix-agent2` (Server `192.168.72.5`) and chrony with the
   Swiss NTP pool.
 - `zabbix/install-sm-proxy.sh` — install a **SmartMonitoring proxy** (Zabbix 7.0) on Debian/Ubuntu.
-  A **composite**: `include_installer zabbix-agent2` + `zabbix-proxy`, then a customer/location wizard
+  A **composite**: `include_component zabbix-agent2` + `zabbix-proxy`, then a customer/location wizard
   (→ hostname `<customer>-proxy-<location>`), PSK and Swiss NTP. The whole thing runs as one combined
   lifecycle (single `apt install`, grouped service restart).
 - `proxmox/post-install.sh` — framework component: chrony (Swiss NTP) + unattended-upgrades.
 
 `framework/` — sourced Bash libraries (`.func`, `# shellcheck shell=bash`): an event-driven installer
-mini-framework. Two reuse mechanisms:
-- A **component is purely declarative** — it sets a few package-specific vars (with `:-` defaults so a
-  composite can override, e.g. `ZABBIX_VERSION`), and a **registration unit** `<slug>_register()`
-  *enhances* the shared collections via `add_packages`/`add_service` and registers handlers/questions.
-  Components never assign `APP_PACKAGES`/`APP_SERVICES` — they only add. All real work sits in event
-  handlers; the only top-level statement is a guarded standalone entry that calls `<slug>_register`
-  + `installer_run "$@"` when run directly (skipped under `_COMPOSING`).
-- **Composition:** a top-level script calls `include_installer <slug>` (sources a sibling in compose
-  mode so its standalone entry does not fire), then calls the `<slug>_register` functions it wants,
-  adds its own questions/handlers, and runs ONE `installer_run`. The core then does the heavy work
-  once for the whole run: a single batched `apt install` of `APP_PACKAGES`, one grouped
-  `systemctl enable/restart` of `APP_SERVICES`.
+mini-framework, layered as single-purpose modules. Two kinds of leaf script, two entry points:
+- A **component** (in `component/`) sources `component.func` and is a **flat** script with a fixed
+  section order: **contract vars** (with `:-` defaults so a composite can override, e.g.
+  `ZABBIX_VERSION`) → **func calls** (`add_packages`/`add_services` + `register_question`/
+  `register_event_handler`, which run at source time) → plain **funcs** → **event funcs** (the
+  handler definitions) → `installer_run "$@"`. Components never assign `APP_PACKAGES`/`APP_SERVICES`;
+  they only add. All real work sits in event handlers. There is **no** `<slug>_register()` wrapper and
+  **no** `_COMPOSING` guard — the framework owns the compose decision (`installer_run` no-ops when
+  `_COMPOSING` is set). Each component `register_question`s the config values it needs; a value preset
+  before the wizard is not asked. Composites follow the same section order.
+- **Composition:** a **composite** (top-level script) sources `composite.func`, sets a component's
+  contract vars **first**, then calls `include_component <slug>` (sources a sibling under
+  `_COMPOSING`, so the sibling's registrations run while its trailing `installer_run` no-ops), adds
+  its own questions/handlers, and calls ONE `installer_run`. The core then does the heavy work once
+  for the whole run: a single batched `apt install` of `APP_PACKAGES`, one grouped
+  `systemctl enable/restart` of `APP_SERVICES`. **Ordering matters:** contract vars must precede the
+  matching `include_component`, since the component reads them at source time.
 
 Libs are sourced from `${FUNC_BASE_URL:-…/main}/framework/*.func` and carry load-once guards
 (`_CORE_FUNC_LOADED` etc.) so they can be pre-sourced locally for testing.
-- `framework/core.func` — colors/formatting/icons, `msg_info|ok|error|warn`, `silent()` + `set_std_mode`
-  (`STD="silent"`), `load_functions`, `shell_check`, `root_check`, `is_unattended`, `exit_script`.
-- `framework/installer.func` — event registry (`register_event_handler`, `run_event`),
-  `add_packages`/`add_service` accumulators, `include_installer`, batched default handlers
-  (install/upgrade/purge of `APP_PACKAGES`, grouped enable/disable of `APP_SERVICES`), and
-  `installer_run` orchestrating install/update/remove around `configure`/`pre_*`/`*`/`post_*` events.
+- `framework/core.func` — pure utilities: colors/formatting/icons, `msg_info|ok|error|warn`,
+  `silent()` + `set_std_mode` (`STD="silent"`), `load_functions`, `shell_check`, `root_check`,
+  `is_unattended`, `exit_script`. Sourced by everything.
+- `framework/engine.func` — the installer engine: event registry (`register_event_handler`,
+  `run_event`), `add_packages`/`add_services` accumulators, batched default handlers (install/upgrade/
+  purge of `APP_PACKAGES`, grouped enable/disable of `APP_SERVICES`), and `installer_run`
+  orchestrating install/update/remove. Order per mode: `configure` event → `run_questions` (so a
+  configure handler can pre-answer/suppress questions) → `pre_*`/`*`/`post_*`. Sources core.
 - `framework/prompt.func` — declarative question registry: `register_question <KEY> <type> <prompt>
   [opts]` (`input`/`menu`/`yesno`/`input_list`, with `default=`/`validate=`/`when=`); `run_questions`
   renders a multi-step whiptail wizard (Next/Back/Exit) and stores answers in `$KEY`, falling back to
-  declared defaults when unattended.
-- `framework/tools.func` — shared helpers: `setup_zabbix_repo` (version-aware repo URL, idempotent),
-  `generate_psk`, `configure_swiss_ntp`.
-- `framework/script.func` — convenience entry that sources installer.func + tools.func; `add_application`.
+  declared defaults when unattended. A question whose `$KEY` is already set (preset by a composite,
+  env or a configure handler) is **omitted**.
+- `framework/component-tools.func` — helpers shared by ≥2 components: `setup_zabbix_repo`
+  (version-aware repo URL, idempotent) and its `_version_ge`. Single-use helpers stay inline in
+  their script (e.g. `generate_psk` lives in `install-sm-proxy.sh`); there is no composite-tools lib.
+- `framework/component.func` — **component entry point**: sources core + engine + prompt +
+  component-tools.
+- `framework/composite.func` — **composite entry point**: sources core + engine + prompt, and
+  provides `include_component` (resolves `component/<slug>.sh`, locally via `COMPONENT_LOCAL_DIR`).
 
-`installer/` — reusable component units (each defines `<slug>_register()` + a guarded standalone
-entry; runnable directly or `include_installer`-ed by a composite):
-- `installer/chrony.sh` — `chrony_register`: a `menu` + `input_list` NTP-source question and a single
-  config-write handler. The reference worked example.
-- `installer/zabbix-agent2.sh` — `zabbix_agent2_register`: agent2 package/service, repo setup in
-  `pre_install`, conf write in `post_install`. Reads `ZBX_SERVER`/`ZBX_AGENT_HOSTNAME`; suppresses the
-  server question when `ZBX_SERVER` is preset.
-- `installer/zabbix-proxy.sh` — `zabbix_proxy_register`: **proxy package only**, writes the proxy conf
-  from contract vars (`ZBX_SERVER`, `ZBX_PROXY_HOSTNAME`, `ZBX_DB_PATH`, optional `ZBX_PSK_FILE`).
+`component/` — reusable component units (flat; runnable directly via `component.func`, or
+`include_component`-ed by a composite):
+- `component/chrony.sh` — a `menu` + `input_list` NTP-source question and a single config-write
+  handler. The reference worked example.
+- `component/zabbix-agent2.sh` — agent2 package/service, repo setup in `pre_install`, conf write in
+  `post_install`. Asks `ZABBIX_AGENT2__SERVER` and `ZABBIX_AGENT2__HOSTNAME` (default `$(hostname)`);
+  both auto-omitted when a composite presets them.
+- `component/zabbix-proxy.sh` — **proxy package only**, asks `ZABBIX_PROXY__SERVER` and
+  `ZABBIX_PROXY__HOSTNAME` (default `$(hostname)`); writes the proxy conf, taking `_ZABBIX_PROXY__DB_PATH`
+  and optional `_ZABBIX_PROXY__PSK_FILE` from internal contract vars.
 
 ## How to run
 
@@ -80,5 +93,10 @@ wget -O - https://raw.githubusercontent.com/btc-jost/scripts/main/zabbix/install
 - Lint with **shellcheck** (libs start with `# shellcheck shell=bash`; inline `# shellcheck disable=...`
   where needed). Recommended VS Code extensions in `.vscode/extensions.json`: shellcheck, shell-format,
   shell-syntax, markdownlint, editorconfig.
-- Naming: `<area>/<verb>-<thing>.sh`; framework hooks follow `<event>_<component>` (e.g. `install_chrony`).
+- Naming: `<area>/<verb>-<thing>.sh`; event handlers follow `<module>_<event>` (e.g. `chrony_post_install`).
+- Variables are `<MODULE>__<NAME>` — the module name in caps (`CHRONY`, `ZABBIX_AGENT2`,
+  `ZABBIX_PROXY`, `SM_PROXY`) joined to the name by a **double underscore**. A **leading `_`** marks an
+  internal/script-only var (`_ZABBIX_PROXY__CONF`); without the leading `_` it is a wizard input used
+  in a `register_question` call (`ZABBIX_AGENT2__SERVER`). Exception: `ZABBIX_VERSION` is a single
+  shared var read by `setup_zabbix_repo`.
 - Every script begins with the standard GPL-3.0 header block.

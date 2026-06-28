@@ -12,16 +12,16 @@ Licensed under GPL-3.0 (see [`LICENSE`](LICENSE)).
 | --- | --- |
 | `3cx/post-install.sh` | Post-install for a fresh 3CX server on Debian: Zabbix agent 2 + chrony. |
 | `zabbix/install-sm-proxy.sh` | Interactive installer for a SmartMonitoring (Zabbix 7.0) proxy. |
-| `proxmox/post-install.sh` | Proxmox host post-install (stub / work in progress). |
+| `proxmox/post-install.sh` | Proxmox host post-install: chrony (Swiss NTP) + unattended-upgrades. |
 | `framework/*.func` | Sourced Bash libraries: an event-driven installer mini-framework. |
-| `installer/*.sh` | Per-component installers (chrony, Zabbix agent 2, Zabbix proxy) built on the framework. |
+| `component/*.sh` | Reusable component installers (chrony, Zabbix agent 2, Zabbix proxy) built on the framework. |
 
 ## Prerequisites
 
 - A **Debian or Ubuntu** host (scripts use `apt` and read `/etc/os-release`).
 - **Bash** as the running shell, executed **as root**.
 - `wget` (used both to fetch the scripts and inside them).
-- `whiptail` for the interactive scripts (`zabbix/install-sm-proxy.sh`, `installer/chrony.sh`).
+- `whiptail` for the interactive scripts (`zabbix/install-sm-proxy.sh`, `component/chrony.sh`).
 
 ## Usage
 
@@ -54,22 +54,33 @@ they can be registered on the Zabbix server.
 
 ## Framework and component installers
 
-`framework/` contains a small event-driven installer library, sourced (not executed) by the scripts in
-`installer/`:
+`framework/` contains a small event-driven installer library, layered as single-purpose modules and
+sourced (not executed) by the leaf scripts:
 
-- `core.func` — shell/root checks, verbose mode, exit helper.
-- `installer.func` — event-handler registry and `installer_run` driver with `install` / `update` /
-  `remove` modes, plus apt install/upgrade-with-retry helpers.
-- `script.func` — thin wrapper that sources `installer.func`.
+- `core.func` — colors/logging, shell/root checks, verbose mode, exit helper. Sourced by everything.
+- `engine.func` — the installer engine: the event-handler registry, `add_packages`/`add_services`
+  accumulators, batched apt/systemd default handlers, and the `installer_run` driver with
+  `install` / `update` / `remove` modes.
+- `prompt.func` — the declarative `whiptail` question wizard (omits any question whose variable is
+  already set).
+- `component-tools.func` — helpers shared by ≥2 components (`setup_zabbix_repo`). Single-use helpers
+  stay inline in their script.
+- `component.func` — entry point for the reusable units in `component/` (sources core + engine +
+  prompt + component-tools).
+- `composite.func` — entry point for the top-level composites (sources core + engine + prompt) and
+  adds `include_component` for pulling components into one combined run.
 
-A component installer registers handlers for lifecycle events (`configure`, `pre_install`, `install`,
-`post_install`, and the corresponding `*_update` / `*_remove` events) and calls `installer_run "$@"`.
-`installer/chrony.sh` is the most complete example: it adds the `chrony` package and offers a menu to
-pick the Swiss NTP pool or enter custom NTP servers.
+A component is a flat script: it adds its package/service, registers questions for its config and
+handlers for lifecycle events (`configure`, `pre_install`, `install`, `post_install`, and the
+corresponding `*_update` / `*_remove` events), and ends with `installer_run "$@"`.
+`component/chrony.sh` is the most complete example: it adds the `chrony` package and offers a menu to
+pick the Swiss NTP pool or enter custom NTP servers. Composites pull it in with `include_component
+chrony` (presetting `CHRONY__SOURCE=swiss` to skip the prompt).
 
-> Note: the framework and `installer/` scripts `source` their dependencies from a `main/misc/` path on
-> GitHub raw that is not present in this repository, so they are not yet runnable from a clean clone.
-> `proxmox/post-install.sh` and `installer/zabbix-proxy.sh` are stubs. Treat these as work in progress.
+> The leaf scripts `source` their framework dependencies from `${FUNC_BASE_URL:-…/main}/framework/…`.
+> To run an unmerged branch end-to-end, export `FUNC_BASE_URL=…/<branch>`; for local development,
+> pre-source the `framework/*.func` files so the load guards turn the remote `source` lines into
+> no-ops (see `tests/harness.sh`).
 
 ## Conventions
 

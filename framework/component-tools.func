@@ -1,9 +1,9 @@
 # shellcheck shell=bash
 #
-# btc Helper Scripts - Shared Tool Functions
+# btc Helper Scripts - Component Tools
 #
-# Copyright (C) 2025  btc.jost AG
-# Copyright (C) 2025  Simon Gilli
+# Copyright (C) 2025-2026  btc.jost AG
+# Copyright (C) 2025-2026  Simon Gilli
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -18,8 +18,11 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-[[ -n "${_TOOLS_FUNC_LOADED:-}" ]] && return
-_TOOLS_FUNC_LOADED=1
+# Helpers shared by more than one component. Single-use helpers stay inline in
+# their component for easier maintenance; only multi-component helpers live here.
+
+[[ -n "${_COMPONENT_TOOLS_FUNC_LOADED:-}" ]] && return
+_COMPONENT_TOOLS_FUNC_LOADED=1
 
 FUNC_BASE_URL="${FUNC_BASE_URL:-https://raw.githubusercontent.com/btc-jost/scripts/main}"
 # shellcheck disable=SC1090
@@ -46,7 +49,7 @@ _version_ge() {
 setup_zabbix_repo() {
   # Idempotent: if several zabbix components take part in one run, add the repo
   # only once (the first call wins, using whatever ZABBIX_VERSION is set then).
-  [[ -n "${_ZBX_REPO_DONE:-}" ]] && return 0
+  [[ -n "${_ZABBIX_REPO_DONE:-}" ]] && return 0
 
   local version="${ZABBIX_VERSION:?ZABBIX_VERSION must be set}"
   local ID VERSION_ID
@@ -68,44 +71,11 @@ setup_zabbix_repo() {
   if $STD wget -O "${tmp}/${deb}" "$url" && $STD dpkg -i "${tmp}/${deb}"; then
     $STD apt-get update || true
     rm -rf "$tmp"
-    _ZBX_REPO_DONE=1
+    _ZABBIX_REPO_DONE=1
     msg_ok "Added Zabbix ${version} repository"
   else
     rm -rf "$tmp"
     msg_error "Failed to add Zabbix repository from ${url}"
     return 1
   fi
-}
-
-# ------------------------------------------------------------------------------
-# generate_psk [keyfile] - create a 256-byte hex PSK if one does not exist.
-# Idempotent: an existing key is kept.
-# ------------------------------------------------------------------------------
-generate_psk() {
-  local keyfile="${1:-/etc/zabbix/psk.key}"
-  if [[ -f "$keyfile" ]]; then
-    msg_warn "PSK key already exists at ${keyfile}; keeping it"
-    return 0
-  fi
-  msg_info "Generating PSK key"
-  mkdir -p "$(dirname "$keyfile")"
-  openssl rand -hex 256 >"$keyfile"
-  msg_ok "Generated PSK key"
-}
-
-# ------------------------------------------------------------------------------
-# configure_swiss_ntp [sources-file] - point chrony at the Swiss NTP pool.
-# ------------------------------------------------------------------------------
-configure_swiss_ntp() {
-  local file="${1:-/etc/chrony/sources.d/pool-ntp-org.sources}"
-  msg_info "Configuring Swiss NTP sources"
-  mkdir -p "$(dirname "$file")"
-  cat >"$file" <<'EOF'
-pool 0.ch.pool.ntp.org iburst
-pool 1.ch.pool.ntp.org iburst
-pool 2.ch.pool.ntp.org iburst
-pool 3.ch.pool.ntp.org iburst
-EOF
-  $STD chronyc reload sources || true
-  msg_ok "Configured Swiss NTP sources"
 }

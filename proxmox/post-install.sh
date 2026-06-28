@@ -2,8 +2,8 @@
 #
 # btc Helper Scripts - Proxmox Post-Installation Script
 #
-# Copyright (C) 2025  btc.jost AG
-# Copyright (C) 2025  Simon Gilli
+# Copyright (C) 2025-2026  btc.jost AG
+# Copyright (C) 2025-2026  Simon Gilli
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -20,20 +20,24 @@
 
 FUNC_BASE_URL="${FUNC_BASE_URL:-https://raw.githubusercontent.com/btc-jost/scripts/main}"
 # shellcheck disable=SC1090
-[[ -n "${_INSTALLER_FUNC_LOADED:-}" ]] || source <(wget -qO- "${FUNC_BASE_URL}/framework/installer.func")
+[[ -n "${_COMPOSITE_FUNC_LOADED:-}" ]] || source <(wget -qO- "${FUNC_BASE_URL}/framework/composite.func")
 
 # --- Declaration -------------------------------------------------------------
-APP="Proxmox Post-Install"
-add_packages chrony unattended-upgrades
-add_service chronyd
+_ZABBIX_AGENT2__CONF="${_ZABBIX_AGENT2__CONF:-/etc/zabbix/zabbix_agent2.d/smartmonitoring.conf}"
+ZABBIX_VERSION="${ZABBIX_VERSION:-7.0}"
+ZABBIX_AGENT2__HOSTNAME="${ZABBIX_AGENT2__HOSTNAME:-$(hostname)}"
+# Swiss NTP comes from the chrony component; preset its source to skip the prompt.
+CHRONY__SOURCE="${CHRONY__SOURCE:-swiss}"
+
+include_component zabbix-agent2
+include_component chrony
+add_packages unattended-upgrades
+register_event_handler post_install proxmox_post_install
 
 proxmox_post_install() {
-  configure_swiss_ntp
-
   msg_info "Enabling unattended-upgrades"
   $STD systemctl enable --now unattended-upgrades || true
   msg_ok "Enabled unattended-upgrades"
 }
-register_event_handler post_install proxmox_post_install
 
 installer_run "$@"

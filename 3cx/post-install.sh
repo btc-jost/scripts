@@ -2,8 +2,8 @@
 #
 # btc Helper Scripts - 3CX Post-Installation Script (composite)
 #
-# Copyright (C) 2025  btc.jost AG
-# Copyright (C) 2025  Simon Gilli
+# Copyright (C) 2025-2026  btc.jost AG
+# Copyright (C) 2025-2026  Simon Gilli
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -20,23 +20,18 @@
 
 FUNC_BASE_URL="${FUNC_BASE_URL:-https://raw.githubusercontent.com/btc-jost/scripts/main}"
 # shellcheck disable=SC1090
-[[ -n "${_INSTALLER_FUNC_LOADED:-}" ]] || source <(wget -qO- "${FUNC_BASE_URL}/framework/installer.func")
-
-include_installer zabbix-agent2
+[[ -n "${_COMPOSITE_FUNC_LOADED:-}" ]] || source <(wget -qO- "${FUNC_BASE_URL}/framework/composite.func")
 
 # --- Declaration -------------------------------------------------------------
-APP="3CX Post-Install"
+# Contract for the included components, set BEFORE include_component (the
+# components read these at source time; presetting them suppresses their
+# matching wizard questions).
+_ZABBIX_AGENT2__CONF="${_ZABBIX_AGENT2__CONF:-/etc/zabbix/zabbix_agent2.d/smartmonitoring.conf}"
 ZABBIX_VERSION="${ZABBIX_VERSION:-7.4}"
-ZBX_SERVER="${ZBX_SERVER:-192.168.72.5}"
-_AGENT_CONF="${_AGENT_CONF:-/etc/zabbix/zabbix_agent2.d/smart_monitoring.conf}"
+ZABBIX_AGENT2__SERVER="${ZABBIX_AGENT2__SERVER:-192.168.72.5}"
+CHRONY__SOURCE="${CHRONY__SOURCE:-swiss}"
 
-zabbix_agent2_register
-add_packages chrony
-add_service chronyd
-
-threecx_post_install() {
-  configure_swiss_ntp
-}
-register_event_handler post_install threecx_post_install
+include_component zabbix-agent2
+include_component chrony
 
 installer_run "$@"
