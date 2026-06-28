@@ -182,7 +182,20 @@ _q_clear_answer() {
 }
 
 # ------------------------------------------------------------------------------
-# Internal: ask a single question with whiptail. Returns 0 on Next, 1 on Back.
+# Internal: confirm aborting the wizard. Shown when ESC is pressed (whiptail exit
+# code 255, distinct from the Back/Cancel button's 1). Returns 0 only when the
+# user explicitly chooses to exit; ESC on this dialog resumes (safe default).
+# ------------------------------------------------------------------------------
+_q_abort_confirm() {
+  # shellcheck disable=SC2153  # TITLE is a global from core.func
+  whiptail --backtitle "${TITLE}" --title "Exit installer?" \
+    --yes-button "Exit" --no-button "Resume" --defaultno \
+    --yesno "\nAbort the installation and exit?" 8 60 3>&1 1>&2 2>&3
+}
+
+# ------------------------------------------------------------------------------
+# Internal: ask a single question with whiptail.
+# Returns: 0 = Next, 1 = Back, 2 = Exit (ESC -> abort confirmed).
 # $1 idx  $2 step  $3 total
 # ------------------------------------------------------------------------------
 _q_ask() {
@@ -196,34 +209,48 @@ _q_ask() {
   local back_button="Back"
   [[ "$step" == "1" ]] && back_button="Exit"
 
+  local value rc
   case "$type" in
     input)
-      local value
       while true; do
         value=$(whiptail --backtitle "$backtitle" --title "$title" \
           --ok-button "Next" --cancel-button "$back_button" \
           --inputbox "\n${prompt}" 10 60 "${!key:-$_OPT_DEFAULT}" \
-          3>&1 1>&2 2>&3) || return 1
-        if _q_validate "$_OPT_VALIDATE" "$value"; then
-          _q_store "$key" "$value"
-          return 0
+          3>&1 1>&2 2>&3)
+        rc=$?
+        if ((rc == 0)); then
+          if _q_validate "$_OPT_VALIDATE" "$value"; then
+            _q_store "$key" "$value"
+            return 0
+          fi
+          whiptail --backtitle "$backtitle" --title "Invalid value" \
+            --msgbox "The value does not satisfy: ${_OPT_VALIDATE}" 8 60
+        elif ((rc == 1)); then
+          return 1
+        else # ESC
+          _q_abort_confirm && return 2
         fi
-        whiptail --backtitle "$backtitle" --title "Invalid value" \
-          --msgbox "The value does not satisfy: ${_OPT_VALIDATE}" 8 60
       done
       ;;
     yesno)
       # Default to the current answer (or declared default): No unless it's truthy.
       local yn_flag=()
       [[ "${!key:-$_OPT_DEFAULT}" =~ ^(yes|true|1)$ ]] || yn_flag=(--defaultno)
-      if whiptail --backtitle "$backtitle" --title "$title" \
-        --yes-button "Yes" --no-button "No" "${yn_flag[@]}" \
-        --yesno "\n${prompt}" 10 60 3>&1 1>&2 2>&3; then
-        _q_store "$key" "yes"
-      else
-        _q_store "$key" "no"
-      fi
-      return 0
+      while true; do
+        whiptail --backtitle "$backtitle" --title "$title" \
+          --yes-button "Yes" --no-button "No" "${yn_flag[@]}" \
+          --yesno "\n${prompt}" 10 60 3>&1 1>&2 2>&3
+        rc=$?
+        if ((rc == 0)); then
+          _q_store "$key" "yes"
+          return 0
+        elif ((rc == 1)); then
+          _q_store "$key" "no"
+          return 0
+        else # ESC
+          _q_abort_confirm && return 2
+        fi
+      done
       ;;
     menu)
       local menu_args=() pair tag label
@@ -232,24 +259,39 @@ _q_ask() {
         label="${pair#*=}"
         menu_args+=("$tag" "$label")
       done
-      local value
-      value=$(whiptail --backtitle "$backtitle" --title "$title" \
-        --ok-button "Next" --cancel-button "$back_button" \
-        --default-item "${!key:-$_OPT_DEFAULT}" \
-        --menu "\n${prompt}" 16 60 "${#_OPT_MENU[@]}" \
-        "${menu_args[@]}" 3>&1 1>&2 2>&3) || return 1
-      _q_store "$key" "$value"
-      return 0
+      while true; do
+        value=$(whiptail --backtitle "$backtitle" --title "$title" \
+          --ok-button "Next" --cancel-button "$back_button" \
+          --default-item "${!key:-$_OPT_DEFAULT}" \
+          --menu "\n${prompt}" 16 60 "${#_OPT_MENU[@]}" \
+          "${menu_args[@]}" 3>&1 1>&2 2>&3)
+        rc=$?
+        if ((rc == 0)); then
+          _q_store "$key" "$value"
+          return 0
+        elif ((rc == 1)); then
+          return 1
+        else # ESC
+          _q_abort_confirm && return 2
+        fi
+      done
       ;;
     input_list)
-      local entries=() entry
+      local entries=()
       while true; do
-        entry=$(whiptail --backtitle "$backtitle" --title "$title" \
+        value=$(whiptail --backtitle "$backtitle" --title "$title" \
           --ok-button "Add" --cancel-button "Done" \
           --inputbox "\n${prompt}" 10 60 \
-          3>&1 1>&2 2>&3) || break
-        [[ -z "$entry" ]] && break
-        entries+=("$entry")
+          3>&1 1>&2 2>&3)
+        rc=$?
+        if ((rc == 0)); then
+          [[ -z "$value" ]] && break # empty entry finishes the list
+          entries+=("$value")
+        elif ((rc == 1)); then
+          break # Done finishes the list
+        else # ESC
+          _q_abort_confirm && return 2
+        fi
       done
       _q_store_list "$key" "${entries[@]}"
       return 0
@@ -296,9 +338,9 @@ _q_last_shown() {
 }
 
 # Internal: render the confirmation summary of all shown answers (by title) and ask
-# Confirm / Back. Returns 0 on Confirm, 1 on Back.
+# Confirm / Back. Returns: 0 = Confirm, 1 = Back, 2 = Exit (ESC -> abort confirmed).
 _q_confirm_summary() {
-  local k key type title val text="" lines
+  local k key type title val text="" lines rc
   for ((k = 0; k < ${#_Q_KEYS[@]}; k++)); do
     _q_is_shown "$k" || continue
     key="${_Q_KEYS[$k]}"
@@ -323,6 +365,11 @@ _q_confirm_summary() {
   whiptail --backtitle "${TITLE} [Step ${total}/${total}]" --title "Confirm settings" \
     --yes-button "Confirm" --no-button "Back" \
     --yesno "\n${text}\nProceed with these settings?" "$lines" 64 3>&1 1>&2 2>&3
+  rc=$?
+  ((rc == 0)) && return 0
+  ((rc == 1)) && return 1
+  _q_abort_confirm && return 2 # ESC
+  return 1                     # not aborting -> treat as Back
 }
 
 # ------------------------------------------------------------------------------
@@ -417,10 +464,16 @@ run_questions() {
       step=$_STEP
       total=$_TOTAL
       ((review_enabled)) && total=$((total + 1))
-      if _q_ask "$i" "$step" "$total"; then
+      local rc
+      _q_ask "$i" "$step" "$total"
+      rc=$?
+      if ((rc == 0)); then
         dir=1
         i=$((i + 1))
-      else
+      elif ((rc == 2)); then # ESC -> abort confirmed
+        exited=1
+        break
+      else # Back
         ((i <= first_askable)) && { exited=1; break; }
         dir=-1
         i=$((i - 1))
@@ -428,10 +481,12 @@ run_questions() {
     done
     ((exited)) && break
     ((review_enabled)) || break
-    if _q_confirm_summary; then
-      break
-    fi
-    start=$(_q_last_shown) # Back from summary -> edit the last shown question
+    local src
+    _q_confirm_summary
+    src=$?
+    ((src == 0)) && break             # Confirm
+    ((src == 2)) && { exited=1; break; } # ESC -> abort confirmed
+    start=$(_q_last_shown)            # Back from summary -> edit the last shown question
   done
   tput rmcup 2>/dev/null || true
 
