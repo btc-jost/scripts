@@ -369,9 +369,13 @@ run_questions() {
   local has_verbose=0
   for j in "${_Q_KEYS[@]}"; do [[ "$j" == "VERBOSE" ]] && has_verbose=1; done
   if [[ "${WIZARD_VERBOSE_PROMPT:-yes}" =~ ^(yes|true|1)$ && -z "${VERBOSE:-}" && $has_verbose -eq 0 ]]; then
-    register_question VERBOSE yesno \
-      $'Enable verbose mode?\n\nShows detailed output during the installation.' \
-      default=no title="Verbose mode"
+    # A menu (not yesno) so the step keeps the standard Next/Back/Exit buttons -
+    # a whiptail yes/no box has no Back button.
+    register_question VERBOSE menu \
+      "Show detailed output during the installation?" \
+      default=no title="Verbose mode" \
+      "no=No - quiet output (recommended)" \
+      "yes=Yes - show all command output"
     n=${#_Q_KEYS[@]}
   fi
 
