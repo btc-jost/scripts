@@ -64,7 +64,8 @@ sourced (not executed) by the leaf scripts:
   accumulators, batched apt/systemd default handlers, and the `installer_run` driver with
   `install` / `update` / `remove` modes.
 - `prompt.func` — the declarative `whiptail` question wizard (omits any question whose variable is
-  already set).
+  already set; `title=` sets a human-readable dialog title). When it shows any question it also adds a
+  verbose toggle and a summary/confirm page, and numbers the steps by what's actually shown.
 - `component-tools.func` — helpers shared by ≥2 components (`setup_zabbix_repo`). Single-use helpers
   stay inline in their script.
 - `component.func` — entry point for the reusable units in `component/` (sources core + engine +

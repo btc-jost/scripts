@@ -47,8 +47,8 @@ CHRONY__SOURCE="${CHRONY__SOURCE:-swiss}"
 include_component zabbix-agent2
 include_component zabbix-proxy
 include_component chrony
-register_question SM_PROXY__CUSTOMER input "Set customer name" validate=alnum
-register_question SM_PROXY__LOCATION input "Set location" validate=alnum
+register_question SM_PROXY__CUSTOMER input "Set customer name" validate=alnum title=Customer
+register_question SM_PROXY__LOCATION input "Set location" validate=alnum title=Location
 register_event_handler pre_install smproxy_pre_install
 register_event_handler post_install smproxy_post_install
 

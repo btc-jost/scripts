@@ -48,10 +48,15 @@ Libs are sourced from `${FUNC_BASE_URL:-…/main}/framework/*.func` and carry lo
   orchestrating install/update/remove. Order per mode: `configure` event → `run_questions` (so a
   configure handler can pre-answer/suppress questions) → `pre_*`/`*`/`post_*`. Sources core.
 - `framework/prompt.func` — declarative question registry: `register_question <KEY> <type> <prompt>
-  [opts]` (`input`/`menu`/`yesno`/`input_list`, with `default=`/`validate=`/`when=`); `run_questions`
-  renders a multi-step whiptail wizard (Next/Back/Exit) and stores answers in `$KEY`, falling back to
-  declared defaults when unattended. A question whose `$KEY` is already set (preset by a composite,
-  env or a configure handler) is **omitted**.
+  [opts]` (`input`/`menu`/`yesno`/`input_list`, with `default=`/`validate=`/`when=`/`title=`);
+  `run_questions` renders a multi-step whiptail wizard (Next/Back/Exit) and stores answers in `$KEY`,
+  falling back to declared defaults when unattended. `title=` gives the dialog a human-readable title
+  (and the summary label) instead of the raw `$KEY`. A question whose `$KEY` is already set (preset by
+  a composite, env or a configure handler) is **omitted**; Back re-edits answers given during the
+  wizard. When at least one real question is shown, the wizard appends two built-in steps: a
+  **verbose toggle** (`VERBOSE` yes/no, omitted if `VERBOSE` is preset; the choice re-runs
+  `set_std_mode`) and a **summary/confirm** page (Confirm/Back). Step numbers count only the steps
+  actually shown (presets don't inflate them). Disable via `WIZARD_VERBOSE_PROMPT=no` / `WIZARD_REVIEW=no`.
 - `framework/component-tools.func` — helpers shared by ≥2 components: `setup_zabbix_repo`
   (version-aware repo URL, idempotent) and its `_version_ge`. Single-use helpers stay inline in
   their script (e.g. `generate_psk` lives in `install-sm-proxy.sh`); there is no composite-tools lib.

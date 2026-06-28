@@ -23,8 +23,10 @@ architecture. Key ideas:
   calls `include_component <slug>` (sources a sibling under `_COMPOSING`), adds its own steps, and
   runs ONE `installer_run`. The core then does one batched `apt install` and one grouped
   `systemctl enable/restart`.
-- **Prompts** are declarative (`register_question`), rendered by a multi-step whiptail wizard, with
-  unattended fallback to declared defaults.
+- **Prompts** are declarative (`register_question`, with an optional `title=` for a human-readable
+  dialog title), rendered by a multi-step whiptail wizard, with unattended fallback to declared
+  defaults. When any question is shown the wizard appends a verbose toggle and a summary/confirm page;
+  step numbers count only the shown steps, and Back re-edits earlier answers.
 
 ## Local dry-run harness (no root, no Debian)
 
@@ -72,7 +74,9 @@ for linting (`apt-get install -y shellcheck`).
    - `component/zabbix-proxy.sh` — proxy-only; prompts for server (required) and hostname (default
      `$(hostname)`); confirm `zabbix-proxy-sqlite3` installed and the proxy conf written.
 4. **Composite `zabbix/install-sm-proxy.sh install`** — the important one:
-   - whiptail asks **customer** + **location** only (no server prompt — it's pinned);
+   - whiptail asks **Customer** (Step 1/4) + **Location** (2/4) only (no server prompt — it's pinned),
+     then **Verbose mode** (3/4) and a **summary/confirm** page (4/4); titles are human-readable, not
+     raw variable names, and Back re-edits earlier answers;
    - **one** `apt install` line lists `zabbix-agent2 zabbix-proxy-sqlite3 chrony` together;
    - the Zabbix **7.0** repo is added **once** (not twice);
    - both confs get `Hostname=<customer>-proxy-<location>`; proxy conf has the TLS PSK block;
@@ -98,7 +102,10 @@ Verify `update` and `remove` modes on at least chrony and the composite (remove 
   through the chrony component (`include_component chrony`, `CHRONY__SOURCE=swiss`), so the old
   `configure_swiss_ntp` composite helper was dropped.
 - `zabbix/install-sm-proxy.sh` no longer has its old hand-built wizard; customer/location now go
-  through the declarative prompt registry. Confirm the UX is acceptable on a real terminal.
+  through the declarative prompt registry. The verbose toggle + summary/confirm pages from the old
+  `main` script are back as framework-wide built-ins (see prompt.func / CLAUDE.md). The interactive
+  branch is covered by headless whiptail-stub tests during development; still confirm the UX on a real
+  terminal.
 - `setup_zabbix_repo` URL format was verified against the live repo for 7.0 and 8.0 (≤7.0 →
   `/zabbix/<v>/<id>/`, ≥7.2 → `/zabbix/<v>/release/<id>/`, filename `zabbix-release_latest_<v>+<id><ver>_all.deb`).
   Re-check 7.4 specifically when testing 3cx.

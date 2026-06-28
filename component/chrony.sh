@@ -25,12 +25,11 @@ FUNC_BASE_URL="${FUNC_BASE_URL:-https://raw.githubusercontent.com/btc-jost/scrip
 _CHRONY__NTP_FILE="${_CHRONY__NTP_FILE:-/etc/chrony/sources.d/pool-ntp-org.sources}"
 
 add_packages chrony
-add_services chronyd
-register_question CHRONY__SOURCE menu "Select the NTP time source" default=swiss \
+register_question CHRONY__SOURCE menu "Select the NTP time source" default=swiss title="NTP source" \
   "swiss=Swiss NTP server pool" \
   "custom=User defined servers"
 register_question CHRONY__CUSTOM input_list "Enter an NTP server (leave empty to finish)" \
-  when=CHRONY__SOURCE=custom
+  when=CHRONY__SOURCE=custom title="NTP servers"
 register_event_handler post_install chrony_post_install
 
 chrony_post_install() {

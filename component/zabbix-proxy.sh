@@ -31,9 +31,10 @@ ZABBIX_VERSION="${ZABBIX_VERSION:-7.4}"
 add_packages zabbix-proxy-sqlite3
 add_services zabbix-proxy
 # A composite that pins these beforehand suppresses the matching question automatically.
-register_question ZABBIX_PROXY__SERVER input "Zabbix server address" validate=nonempty
+register_question ZABBIX_PROXY__SERVER input "Zabbix server address" validate=nonempty \
+  title="Zabbix server"
 register_question ZABBIX_PROXY__HOSTNAME input "Zabbix proxy hostname" \
-  default="$(hostname)" validate=nonempty
+  default="$(hostname)" validate=nonempty title="Proxy hostname"
 register_event_handler pre_install zabbix_proxy_pre_install
 register_event_handler post_install zabbix_proxy_post_install
 

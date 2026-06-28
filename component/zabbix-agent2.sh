@@ -30,9 +30,10 @@ ZABBIX_VERSION="${ZABBIX_VERSION:-7.4}"
 add_packages zabbix-agent2
 add_services zabbix-agent2
 # A composite that pins these beforehand suppresses the matching question automatically.
-register_question ZABBIX_AGENT2__SERVER input "Zabbix proxy / server address" validate=nonempty
+register_question ZABBIX_AGENT2__SERVER input "Zabbix proxy / server address" validate=nonempty \
+  title="Zabbix server"
 register_question ZABBIX_AGENT2__HOSTNAME input "Zabbix agent hostname" \
-  default="$(hostname)" validate=nonempty
+  default="$(hostname)" validate=nonempty title="Agent hostname"
 register_event_handler pre_install zabbix_agent2_pre_install
 register_event_handler post_install zabbix_agent2_post_install
 
