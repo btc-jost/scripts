@@ -18,42 +18,41 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-source <(wget -qO- https://raw.githubusercontent.com/btc-jost/scripts/main/misc/installer.func)
+FUNC_BASE_URL="${FUNC_BASE_URL:-https://raw.githubusercontent.com/btc-jost/scripts/main}"
+# shellcheck disable=SC1090
+[[ -n "${_INSTALLER_FUNC_LOADED:-}" ]] || source <(wget -qO- "${FUNC_BASE_URL}/framework/installer.func")
 
-ZABBIX_VERSION="8.0"
+_AGENT_CONF="${_AGENT_CONF:-/etc/zabbix/zabbix_agent2.d/smart_monitoring.conf}"
 
-zabbix_agent2_preinstall() {
-  # Install Zabbix repository
-  if [ -f /etc/os-release ]; then
-    local PACKAGE_NAME=""
-
-    source /etc/os-release
-
-    # Check for Raspbian
-    if [ "$ID" == "raspbian" ]; then
-      PACKAGE_NAME="zabbix-release_latest_${ZABBIX_VERSION}+${ID_LIKE}${VERSION_ID}_all.deb"
-    else
-      PACKAGE_NAME="zabbix-release_latest_${ZABBIX_VERSION}+${ID}${VERSION_ID}_all.deb"
-    fi
-
-    PACKAGE_URL="https://repo.zabbix.com/zabbix/${ZABBIX_VERSION}/release/${ID}/pool/main/z/zabbix-release/${PACKAGE_NAME}"
-
-    wget "${PACKAGE_URL}"
-    dpkg -i "${PACKAGE_NAME}"
-
-    apt update
-
-    # Clean up
-    rm "${PACKAGE_NAME}"
-  fi
+# Reusable unit: opt this component in by calling zabbix_agent2_register.
+# Contract vars (set before calling, optional): ZBX_SERVER, ZBX_AGENT_HOSTNAME.
+zabbix_agent2_register() {
+  add_packages zabbix-agent2
+  add_service zabbix-agent2
+  # Only ask for the server when a composite has not already pinned it.
+  [[ -z "${ZBX_SERVER:-}" ]] &&
+    register_question ZBX_SERVER input "Zabbix server address" \
+      default=192.168.72.5 validate=nonempty
+  register_event_handler pre_install zabbix_agent2_pre_install
+  register_event_handler post_install zabbix_agent2_post_install
 }
 
-# Install Zabbix agent 2
-apt install zabbix-agent2 -y
+zabbix_agent2_pre_install() {
+  setup_zabbix_repo
+}
 
-# Configure Zabbix agent 2
-echo -e 'Server=192.168.72.5\nServerActive=192.168.72.5\nHostname=' > /etc/zabbix/zabbix_agent2.d/smart_monitoring.conf
+zabbix_agent2_post_install() {
+  msg_info "Writing agent2 configuration"
+  mkdir -p "$(dirname "$_AGENT_CONF")"
+  printf 'Server=%s\nServerActive=%s\nHostname=%s\n' \
+    "$ZBX_SERVER" "$ZBX_SERVER" "${ZBX_AGENT_HOSTNAME:-}" >"$_AGENT_CONF"
+  msg_ok "Wrote agent2 configuration"
+}
 
-# Enable and start Zabbix agent 2 service
-systemctl restart zabbix-agent2
-systemctl enable zabbix-agent2
+# Standalone entrypoint (skipped when included via include_installer).
+if [[ -z "${_COMPOSING:-}" ]]; then
+  APP="${APP:-Zabbix Agent 2}"
+  ZABBIX_VERSION="${ZABBIX_VERSION:-8.0}"
+  zabbix_agent2_register
+  installer_run "$@"
+fi

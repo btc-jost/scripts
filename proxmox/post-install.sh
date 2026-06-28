@@ -18,6 +18,22 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-# TODO
-# - configure Chrony
-# - install unattended-upgrades
+FUNC_BASE_URL="${FUNC_BASE_URL:-https://raw.githubusercontent.com/btc-jost/scripts/main}"
+# shellcheck disable=SC1090
+[[ -n "${_INSTALLER_FUNC_LOADED:-}" ]] || source <(wget -qO- "${FUNC_BASE_URL}/framework/installer.func")
+
+# --- Declaration -------------------------------------------------------------
+APP="Proxmox Post-Install"
+add_packages chrony unattended-upgrades
+add_service chronyd
+
+proxmox_post_install() {
+  configure_swiss_ntp
+
+  msg_info "Enabling unattended-upgrades"
+  $STD systemctl enable --now unattended-upgrades || true
+  msg_ok "Enabled unattended-upgrades"
+}
+register_event_handler post_install proxmox_post_install
+
+installer_run "$@"

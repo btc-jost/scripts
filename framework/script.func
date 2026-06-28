@@ -18,10 +18,21 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-source <(wget -qO- https://raw.githubusercontent.com/btc-jost/scripts/main/misc/installer.func)
+[[ -n "${_SCRIPT_FUNC_LOADED:-}" ]] && return
+_SCRIPT_FUNC_LOADED=1
 
+FUNC_BASE_URL="${FUNC_BASE_URL:-https://raw.githubusercontent.com/btc-jost/scripts/main}"
+# shellcheck disable=SC1090
+[[ -n "${_INSTALLER_FUNC_LOADED:-}" ]] || source <(wget -qO- "${FUNC_BASE_URL}/framework/installer.func")
+# shellcheck disable=SC1090
+[[ -n "${_TOOLS_FUNC_LOADED:-}" ]] || source <(wget -qO- "${FUNC_BASE_URL}/framework/tools.func")
+
+# add_application <name> [package] [service]
+# Convenience for the common "one package, one service" component: sets the
+# declarative variables the core reads. Equivalent to assigning APP /
+# APP_PACKAGES / APP_SERVICE by hand.
 add_application() {
-  _APPLICATION_NAME+=$1
-  APPLICATION_PACKAGE="chrony"
-  APPLICATION_SERVICE="chronyd"
+  APP="$1"
+  [[ -n "${2:-}" ]] && APP_PACKAGES=("$2")
+  [[ -n "${3:-}" ]] && APP_SERVICE="$3"
 }

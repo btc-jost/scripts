@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# btc Helper Scripts - 3CX Post-Installation Script
+# btc Helper Scripts - 3CX Post-Installation Script (composite)
 #
 # Copyright (C) 2025  btc.jost AG
 # Copyright (C) 2025  Simon Gilli
@@ -18,36 +18,25 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-source <(wget -qO- https://raw.githubusercontent.com/btc-jost/scripts/main/misc/script.func)
+FUNC_BASE_URL="${FUNC_BASE_URL:-https://raw.githubusercontent.com/btc-jost/scripts/main}"
+# shellcheck disable=SC1090
+[[ -n "${_INSTALLER_FUNC_LOADED:-}" ]] || source <(wget -qO- "${FUNC_BASE_URL}/framework/installer.func")
 
-# Install Zabbix repository
-# shellcheck disable=SC1091
-. /etc/os-release
-wget "https://repo.zabbix.com/zabbix/7.4/release/debian/pool/main/z/zabbix-release/zabbix-release_latest+debian${VERSION_ID}_all.deb"
-dpkg -i "zabbix-release_latest+debian${VERSION_ID}_all.deb"
-apt update
+include_installer zabbix-agent2
 
-# Clean up
-rm "zabbix-release_latest+debian${VERSION_ID}_all.deb"
+# --- Declaration -------------------------------------------------------------
+APP="3CX Post-Install"
+ZABBIX_VERSION="${ZABBIX_VERSION:-7.4}"
+ZBX_SERVER="${ZBX_SERVER:-192.168.72.5}"
+_AGENT_CONF="${_AGENT_CONF:-/etc/zabbix/zabbix_agent2.d/smart_monitoring.conf}"
 
-# Install Zabbix agent 2
-apt install zabbix-agent2 -y
+zabbix_agent2_register
+add_packages chrony
+add_service chronyd
 
-# Configure Zabbix agent 2
-echo -e 'Server=192.168.72.5\nServerActive=192.168.72.5\nHostname=' > /etc/zabbix/zabbix_agent2.d/smart_monitoring.conf
+threecx_post_install() {
+  configure_swiss_ntp
+}
+register_event_handler post_install threecx_post_install
 
-# Enable and start Zabbix agent 2 service
-systemctl enable zabbix-agent2
-systemctl restart zabbix-agent2
-
-# Install chrony for time synchronization
-apt install chrony -y
-
-# Configure chrony to use Swiss NTP servers
-echo -e 'pool 0.ch.pool.ntp.org iburst\npool 1.ch.pool.ntp.org iburst\npool 2.ch.pool.ntp.org iburst\npool 3.ch.pool.ntp.org iburst' > /etc/chrony/sources.d/pool-ntp-org.sources
-
-# Reload sources to apply changes
-chronyc reload sources
-
-# Final message
-echo "Post-installation script completed."
+installer_run "$@"

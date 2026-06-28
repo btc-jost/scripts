@@ -18,145 +18,232 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+[[ -n "${_INSTALLER_FUNC_LOADED:-}" ]] && return
+_INSTALLER_FUNC_LOADED=1
+
+# Base URL for sourcing sibling libs. Defaults to main; override with
+# FUNC_BASE_URL=.../<branch> to test an unmerged branch. The load-once guards
+# mean a harness can pre-source local copies and these wget calls become no-ops.
+FUNC_BASE_URL="${FUNC_BASE_URL:-https://raw.githubusercontent.com/btc-jost/scripts/main}"
+
 # shellcheck disable=SC1090
-source <(wget -qO- https://raw.githubusercontent.com/btc-jost/scripts/main/misc/core.func)
+[[ -n "${_CORE_FUNC_LOADED:-}" ]] || source <(wget -qO- "${FUNC_BASE_URL}/framework/core.func")
+# shellcheck disable=SC1090
+[[ -n "${_PROMPT_FUNC_LOADED:-}" ]] || source <(wget -qO- "${FUNC_BASE_URL}/framework/prompt.func")
+# shellcheck disable=SC1090
+[[ -n "${_TOOLS_FUNC_LOADED:-}" ]] || source <(wget -qO- "${FUNC_BASE_URL}/framework/tools.func")
 
-MODE=${1:-install} # install, update, remove
-
+# ==============================================================================
+# Shared collections and event registry
+# ==============================================================================
+#
+# A run accumulates ONE package collection and ONE service collection, however
+# many components take part. Components never assign these arrays - they only
+# enhance them via add_packages / add_service. The core then does the heavy work
+# once: a single apt install, a single grouped service enable/restart.
+#
+# variables_init() runs at source time, before any component registers handlers
+# or adds packages, so the arrays exist for the first add_* / register call.
+# ------------------------------------------------------------------------------
 variables_init() {
-  declare -a _PACKAGES_ADD
-  declare -A _EVENT_HANDLERS
-  _EVENT_NAMES=("configure" "pre_install" "install" "post_install" "pre_update" "update" "post_update" "pre_remove" "remove" "post_remove")
-  INSTALL_EVENTS=("configure" "pre_install" "install" "post_install")
-  UPDATE_EVENTS=("configure" "pre_update" "update" "post_update")
-  REMOVE_EVENTS=("pre_remove" "remove" "post_remove")
+  declare -ga APP_PACKAGES=()
+  declare -ga APP_SERVICES=()
+  declare -gA _EVENT_HANDLERS=()
+  _EVENT_NAMES=(
+    "configure"
+    "pre_install" "install" "post_install"
+    "pre_update" "update" "post_update"
+    "pre_remove" "remove" "post_remove"
+  )
 }
+variables_init
 
-installer_run() {
-  #
-  echo "Starting installer..."
-  #
-  case $MODE in
-    install)
-      register_event_handler "configure" "_configure"
-      register_event_handler "install" "_install_packages"
-
-      for event in "${INSTALL_EVENTS[@]}"; do
-        echo "Running event: $event"
-        for handler in ${_EVENT_HANDLERS[${event}]}; do
-          $handler
-        done
-      done
-
-      install_packages
-
-      for handler in "${_EVENT_HANDLERS[post_install][@]}"; do
-        $handler
-      done
-      ;;
-    update)
-      for handler in "${_EVENT_HANDLERS[pre_update][@]}"; do
-        $handler
-      done
-
-      install_packages
-
-      for handler in "${_EVENT_HANDLERS[post_update][@]}"; do
-        $handler
-      done
-      ;;
-    remove)
-      for handler in "${_EVENT_HANDLERS[pre_remove][@]}"; do
-        $handler
-      done
-
-      # Removal logic can be added here
-
-      for handler in "${_EVENT_HANDLERS[post_remove][@]}"; do
-        $handler
-      done
-      ;;
-    *)
-      echo "Invalid mode: $MODE"
-      exit 1
-      ;;
-  esac
-}
-
+# add_packages <pkg>... - enhance the shared package collection.
 add_packages() {
-  _PACKAGES_ADD+=("$@")
+  APP_PACKAGES+=("$@")
 }
 
-# Event handler registration
-# $1 - event name
-# $2 - function name
+# add_service <svc>... - enhance the shared service collection.
+add_service() {
+  APP_SERVICES+=("$@")
+}
+
+# register_event_handler <event> <function>
+# Multiple handlers may register for the same event; they run in registration
+# order. Handler names are stored space-joined in a single associative entry.
 register_event_handler() {
-  if [[ ! " ${_EVENT_NAMES[*]} " =~ " ${1} " ]]; then
-    echo "Error: Invalid event name '${1}'"
+  local event="$1" fn="$2"
+  if [[ " ${_EVENT_NAMES[*]} " != *" ${event} "* ]]; then
+    msg_error "Invalid event name '${event}'"
     return 1
   fi
-
-  _EVENT_HANDLERS[$1]+=("$2")
+  _EVENT_HANDLERS["$event"]+=" $fn"
 }
 
-_configure() {
-  :
+# run_event <event> - run every handler registered for an event, in order.
+run_event() {
+  local event="$1" handler
+  for handler in ${_EVENT_HANDLERS["$event"]:-}; do
+    "$handler"
+  done
 }
 
-_install_packages() {
-  if [ "${#_PACKAGES_ADD[@]}" -gt 0 ]; then
-    $STD apt update 2>/dev/null || true
-    _install_packages_with_retry "${_PACKAGES_ADD[@]}"
+# ------------------------------------------------------------------------------
+# include_installer <slug> - pull another installer in as a reusable unit.
+# Sources it in "compose mode" (_COMPOSING set) so its standalone entry does NOT
+# run; only its <slug>_register() and handler functions get defined. The caller
+# then opts the component in by calling <slug>_register.
+# Set INSTALLER_LOCAL_DIR to source from a local checkout (used for testing).
+# ------------------------------------------------------------------------------
+include_installer() {
+  local _COMPOSING=1 slug="$1"
+  if [[ -n "${INSTALLER_LOCAL_DIR:-}" && -f "${INSTALLER_LOCAL_DIR}/${slug}.sh" ]]; then
+    # shellcheck disable=SC1090
+    source "${INSTALLER_LOCAL_DIR}/${slug}.sh"
+  else
+    # shellcheck disable=SC1090
+    source <(wget -qO- "${FUNC_BASE_URL}/installer/${slug}.sh")
   fi
 }
 
+# ==============================================================================
+# Built-in default handlers (orchestrated by installer_run, not registered)
+# ==============================================================================
+
+_install_packages() {
+  [[ ${#APP_PACKAGES[@]} -eq 0 ]] && return 0
+
+  msg_info "Updating package lists"
+  $STD apt-get update || true
+  msg_ok "Updated package lists"
+
+  msg_info "Installing packages: ${APP_PACKAGES[*]}"
+  if _install_packages_with_retry "${APP_PACKAGES[@]}"; then
+    msg_ok "Installed packages: ${APP_PACKAGES[*]}"
+  else
+    msg_error "Failed to install packages: ${APP_PACKAGES[*]}"
+    return 1
+  fi
+}
+
+_upgrade_packages() {
+  [[ ${#APP_PACKAGES[@]} -eq 0 ]] && return 0
+
+  msg_info "Updating package lists"
+  $STD apt-get update || true
+  msg_ok "Updated package lists"
+
+  msg_info "Upgrading packages: ${APP_PACKAGES[*]}"
+  if _upgrade_packages_with_retry "${APP_PACKAGES[@]}"; then
+    msg_ok "Upgraded packages: ${APP_PACKAGES[*]}"
+  else
+    msg_error "Failed to upgrade packages: ${APP_PACKAGES[*]}"
+    return 1
+  fi
+}
+
+_enable_service() {
+  [[ ${#APP_SERVICES[@]} -eq 0 ]] && return 0
+  msg_info "Enabling services: ${APP_SERVICES[*]}"
+  $STD systemctl enable "${APP_SERVICES[@]}" || true
+  $STD systemctl restart "${APP_SERVICES[@]}" || true
+  msg_ok "Enabled services: ${APP_SERVICES[*]}"
+}
+
+_disable_service() {
+  [[ ${#APP_SERVICES[@]} -eq 0 ]] && return 0
+  msg_info "Disabling services: ${APP_SERVICES[*]}"
+  $STD systemctl disable --now "${APP_SERVICES[@]}" || true
+  msg_ok "Disabled services: ${APP_SERVICES[*]}"
+}
+
+_purge_packages() {
+  [[ ${#APP_PACKAGES[@]} -eq 0 ]] && return 0
+  msg_info "Removing packages: ${APP_PACKAGES[*]}"
+  $STD apt-get purge -y "${APP_PACKAGES[@]}" || true
+  $STD apt-get autoremove -y || true
+  msg_ok "Removed packages: ${APP_PACKAGES[*]}"
+}
 
 # ------------------------------------------------------------------------------
-# Install packages with retry logic
-# Usage: install_packages_with_retry "mysql-server" "mysql-client"
+# apt install/upgrade with retry. Output is routed through $STD (silent + log).
 # ------------------------------------------------------------------------------
 _install_packages_with_retry() {
   local packages=("$@")
-  local max_retries=2
-  local retry=0
-
+  local max_retries=2 retry=0
   while [[ $retry -le $max_retries ]]; do
-    if $STD apt install -y "${packages[@]}" 2>/dev/null; then
+    if $STD apt-get install -y "${packages[@]}"; then
       return 0
     fi
-
     retry=$((retry + 1))
     if [[ $retry -le $max_retries ]]; then
       msg_warn "Package installation failed, retrying ($retry/$max_retries)..."
       sleep 2
-      $STD apt update 2>/dev/null || true
+      $STD apt-get update || true
     fi
   done
-
   return 1
 }
 
-# ------------------------------------------------------------------------------
-# Upgrade specific packages with retry logic
-# Usage: upgrade_packages_with_retry "mariadb-server" "mariadb-client"
-# ------------------------------------------------------------------------------
 _upgrade_packages_with_retry() {
   local packages=("$@")
-  local max_retries=2
-  local retry=0
-
+  local max_retries=2 retry=0
   while [[ $retry -le $max_retries ]]; do
-    if $STD apt install --only-upgrade -y "${packages[@]}" 2>/dev/null; then
+    if $STD apt-get install --only-upgrade -y "${packages[@]}"; then
       return 0
     fi
-
     retry=$((retry + 1))
     if [[ $retry -le $max_retries ]]; then
       msg_warn "Package upgrade failed, retrying ($retry/$max_retries)..."
       sleep 2
-      $STD apt update 2>/dev/null || true
+      $STD apt-get update || true
     fi
   done
-
   return 1
+}
+
+# ==============================================================================
+# Orchestrator - the single entry point a (top-level) script calls.
+# ==============================================================================
+# Usage (after all components are registered): installer_run "$@"
+# The core sequences the built-in steps (questions, one batched install, grouped
+# service enable) around every component's registered event handlers.
+installer_run() {
+  MODE="${1:-install}" # install | update | remove
+
+  load_functions
+  shell_check
+  root_check
+
+  case "$MODE" in
+    install)
+      run_questions # built-in: ask declared questions, store answers
+      run_event configure
+      run_event pre_install
+      run_event install
+      _install_packages # built-in: one apt install of the whole collection
+      run_event post_install
+      _enable_service # built-in: one grouped enable/restart of all services
+      ;;
+    update)
+      run_questions
+      run_event configure
+      run_event pre_update
+      run_event update
+      _upgrade_packages
+      run_event post_update
+      _enable_service
+      ;;
+    remove)
+      run_event pre_remove
+      _disable_service
+      run_event remove
+      _purge_packages
+      run_event post_remove
+      ;;
+    *)
+      msg_error "Invalid mode: $MODE (expected install|update|remove)"
+      exit 1
+      ;;
+  esac
 }

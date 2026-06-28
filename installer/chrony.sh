@@ -18,107 +18,50 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-source <(wget -qO- https://raw.githubusercontent.com/btc-jost/scripts/main/misc/installer.func)
+FUNC_BASE_URL="${FUNC_BASE_URL:-https://raw.githubusercontent.com/btc-jost/scripts/main}"
+# shellcheck disable=SC1090
+[[ -n "${_INSTALLER_FUNC_LOADED:-}" ]] || source <(wget -qO- "${FUNC_BASE_URL}/framework/installer.func")
 
-CHRONY_NTP_SERVERS=()
-_CHRONY_NTP_FILE="/etc/chrony/sources.d/pool-ntp-org.sources"
+_CHRONY_NTP_FILE="${_CHRONY_NTP_FILE:-/etc/chrony/sources.d/pool-ntp-org.sources}"
 
-configure_chrony() {
-  # NTP Server Configuration
-  local choice
+# Reusable unit: opt this component in by calling chrony_register.
+chrony_register() {
+  add_packages chrony
+  add_service chronyd
+  register_question NTP_SOURCE menu "Select the NTP time source" default=swiss \
+    "swiss=Swiss NTP server pool" \
+    "custom=User defined servers"
+  register_question NTP_CUSTOM input_list "Enter an NTP server (leave empty to finish)" \
+    when=NTP_SOURCE=custom
+  register_event_handler post_install chrony_post_install
+}
 
-  choice=$(whiptail --backtitle ${TITLE} --title "${APP} LXC Update/Setting" --menu \
-    "Support/Update functions for ${APP} LXC. Choose an option:" \
-    12 60 3 \
-    "1" "Swiss NTP server pool" \
-    "2" "User defined" \
-    "3" "NO (Cancel Update)" --nocancel --default-item "1" 3>&1 1>&2 2>&3)
-
-  case "$choice" in
-  1)
-    CHRONY_NTP_SERVERS=(
-      "0.ch.pool.ntp.org iburst"
-      "1.ch.pool.ntp.org iburst"
-      "2.ch.pool.ntp.org iburst"
-      "3.ch.pool.ntp.org iburst"
-    )
-    ;;
-  2)
-    CHRONY_NTP_SERVERS=()
-    while true; do
-      local ntp_server
-
-      ntp_server=$(whiptail --backtitle ${TITLE} --inputbox "Enter NTP server. Leave empty to finish." 10 60 3>&1 1>&2 2>&3)
-
-      if [ -z "$ntp_server" ]; then
-        break
-      fi
-
-      CHRONY_NTP_SERVERS+=("$ntp_server iburst")
+chrony_post_install() {
+  local sources=()
+  if [[ "${NTP_SOURCE:-swiss}" == "custom" && ${#NTP_CUSTOM[@]} -gt 0 ]]; then
+    local s
+    for s in "${NTP_CUSTOM[@]}"; do
+      sources+=("server ${s} iburst")
     done
-    ;;
-  3)
-    clear
-    exit_script
-    exit
-    ;;
-  esac
+  else
+    sources=(
+      "pool 0.ch.pool.ntp.org iburst"
+      "pool 1.ch.pool.ntp.org iburst"
+      "pool 2.ch.pool.ntp.org iburst"
+      "pool 3.ch.pool.ntp.org iburst"
+    )
+  fi
+
+  msg_info "Configuring NTP sources"
+  mkdir -p "$(dirname "$_CHRONY_NTP_FILE")"
+  printf '%s\n' "${sources[@]}" >"$_CHRONY_NTP_FILE"
+  $STD chronyc reload sources || true
+  msg_ok "Configured NTP sources"
 }
 
-pre_install_chrony() {
-  true
-}
-
-install_chrony() {
-  add_packages "chrony"
-}
-
-post_install_chrony() {
-  # Configure NTP servers
-  IFSBACKUP=$IFS
-  IFS=$'\n'
-  echo ${CHRONY_NTP_SERVERS[*]} > $_CHRONY_NTP_FILE
-  IFS=$IFSBACKUP
-
-  #echo -e 'pool 0.ch.pool.ntp.org iburst\npool 1.ch.pool.ntp.org iburst\npool 2.ch.pool.ntp.org iburst\npool 3.ch.pool.ntp.org iburst' > /etc/chrony/sources.d/pool-ntp-org.sources
-
-  # Reload sources to apply changes
-  chronyc reload sources
-}
-
-pre_update_chrony() {
-  true
-}
-
-update_chrony() {
-  true
-}
-
-post_update_chrony() {
-  true
-}
-
-pre_remove_chrony() {
-  true
-}
-
-remove_chrony() {
-  true
-}
-
-post_remove_chrony() {
-  true
-}
-
-register_event_handler "configure" "configure_chrony"
-register_event_handler "pre_install" "pre_install_chrony"
-register_event_handler "install" "install_chrony"
-register_event_handler "post_install" "post_install_chrony"
-register_event_handler "pre_update" "pre_update_chrony"
-register_event_handler "update" "update_chrony"
-register_event_handler "post_update" "post_update_chrony"
-register_event_handler "pre_remove" "pre_remove_chrony"
-register_event_handler "remove" "remove_chrony"
-register_event_handler "post_remove" "post_remove_chrony"
-
-installer_run "$@"
+# Standalone entrypoint (skipped when included via include_installer).
+if [[ -z "${_COMPOSING:-}" ]]; then
+  APP="${APP:-Chrony}"
+  chrony_register
+  installer_run "$@"
+fi

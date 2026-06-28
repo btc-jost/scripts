@@ -18,42 +18,160 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-#source <(wget -qO- https://raw.githubusercontent.com/btc-jost/scripts/main/misc/installer.func)
+# Load-once guard: this file may be sourced multiple times (e.g. installer.func
+# and a component script both pull it in). Sourcing it again is a no-op.
+[[ -n "${_CORE_FUNC_LOADED:-}" ]] && return
+_CORE_FUNC_LOADED=1
 
 TITLE="btc Helper Scripts"
 
-# Check if the current shell is using bash
-shell_check() {
-  if [[ "$(ps -p $$ -o comm=)" != "bash" ]]; then
-    clear
-    msg_error "Your default shell is not bash. Please report this to our github issues or discord."
-    echo -e "\nExiting..."
-    sleep 2
-    exit
+# ------------------------------------------------------------------------------
+# load_functions() - initialise the core utility groups exactly once.
+# Call this early in any script (installer_run does it for you).
+# ------------------------------------------------------------------------------
+load_functions() {
+  [[ -n "${_FUNCTIONS_LOADED:-}" ]] && return
+  _FUNCTIONS_LOADED=1
+  color
+  formatting
+  icons
+  set_std_mode
+}
+
+# ------------------------------------------------------------------------------
+# color() / formatting() / icons()
+# ANSI colors, text formatting and status icons used across all scripts.
+# Variable names match the community-scripts convention so output strings are
+# portable between the two ecosystems.
+# ------------------------------------------------------------------------------
+color() {
+  YW=$'\033[33m'  # yellow
+  YWB=$'\033[93m' # yellow bright
+  BL=$'\033[36m'  # blue
+  RD=$'\033[01;31m'
+  BGN=$'\033[4;92m'
+  GN=$'\033[1;92m'
+  DGN=$'\033[32m'
+  CL=$'\033[m' # clear
+}
+
+formatting() {
+  BFR="\r\033[K" # carriage return + clear to end of line
+  BOLD=$'\033[1m'
+  HOLD=" "
+  TAB="  "
+}
+
+icons() {
+  CM="${TAB}✔️${TAB}"
+  CROSS="${TAB}✖️${TAB}"
+  INFO="${TAB}💡${TAB}"
+  OS="${TAB}🖥️${TAB}"
+  HOURGLASS="${TAB}⏳${TAB}"
+  HOSTNAME="${TAB}🏠${TAB}"
+}
+
+# ------------------------------------------------------------------------------
+# set_std_mode() - decide whether commands run loudly or quietly.
+# VERBOSE=yes  -> STD=""       (run command directly, show all output)
+# otherwise    -> STD="silent" (run through silent() which logs + hides output)
+# ------------------------------------------------------------------------------
+set_std_mode() {
+  if [[ "${VERBOSE:-no}" == "yes" ]]; then
+    STD=""
+  else
+    STD="silent"
   fi
 }
 
-# Run as root only
+# Active log file for silent(); components may override LOGFILE before running.
+LOGFILE="${LOGFILE:-/tmp/btc-helper-$(date +%Y%m%d_%H%M%S).log}"
+
+# ------------------------------------------------------------------------------
+# silent() - run a command quietly, logging its output.
+# On success: nothing is shown. On failure: show the last lines of the log and
+# return the original exit code (so callers can use `$STD cmd || true`).
+# ------------------------------------------------------------------------------
+silent() {
+  local cmd="$*"
+  "$@" >>"$LOGFILE" 2>&1
+  local rc=$?
+  if [[ $rc -ne 0 ]]; then
+    msg_warn "Command failed (rc=$rc): ${cmd}"
+    tail -n 10 "$LOGFILE" 2>/dev/null >&2 || true
+  fi
+  return $rc
+}
+
+# ------------------------------------------------------------------------------
+# Message helpers. info/ok print to stdout (info leaves the cursor on the same
+# line so a following ok/error overwrites it); warn/error print to stderr.
+# ------------------------------------------------------------------------------
+msg_info() {
+  local msg="$1"
+  [[ -z "$msg" ]] && return
+  printf "%b" "${BFR}${HOURGLASS}${YW}${msg}${CL}"
+}
+
+msg_ok() {
+  local msg="$1"
+  [[ -z "$msg" ]] && return
+  printf "%b\n" "${BFR}${CM}${GN}${msg}${CL}"
+}
+
+msg_error() {
+  local msg="$1"
+  printf "%b\n" "${BFR}${CROSS}${RD}${msg}${CL}" >&2
+}
+
+msg_warn() {
+  local msg="$1"
+  printf "%b\n" "${BFR}${INFO}${YWB}${msg}${CL}" >&2
+}
+
+# ------------------------------------------------------------------------------
+# is_verbose_mode() / is_unattended()
+# Helpers used by the prompt registry to decide between interactive prompts and
+# silent default-driven runs.
+# ------------------------------------------------------------------------------
+is_verbose_mode() {
+  [[ "${VERBOSE:-no}" != "no" ]]
+}
+
+is_unattended() {
+  [[ "${UNATTENDED:-no}" =~ ^(yes|true|1)$ ]] && return 0
+  # Interactive if a controlling terminal exists. We check /dev/tty rather than
+  # stdin, because the canonical `wget -O - URL | bash` pattern leaves stdin as a
+  # pipe while whiptail still reads from the terminal.
+  [[ -e /dev/tty ]] && return 1
+  return 0 # no controlling terminal -> cannot prompt
+}
+
+# ------------------------------------------------------------------------------
+# Environment guards.
+# ------------------------------------------------------------------------------
+shell_check() {
+  if [[ "$(ps -p $$ -o comm=)" != "bash" ]]; then
+    clear
+    msg_error "Your default shell is not bash. Please switch to bash and re-run."
+    echo -e "\nExiting..."
+    sleep 2
+    exit 1
+  fi
+}
+
 root_check() {
   if [[ "$(id -u)" -ne 0 || $(ps -o comm= -p $PPID) == "sudo" ]]; then
     clear
     msg_error "Please run this script as root."
     echo -e "\nExiting..."
     sleep 2
-    exit
-  fi
-}
-
-set_std_mode() {
-  if [[ "$VERBOSE" == "yes" ]]; then
-    STD=""
-  else
-    STD="&>/dev/null"
+    exit 1
   fi
 }
 
 exit_script() {
   clear
-  echo -e "\nExiting..."
-  sleep 1
+  msg_error "User exited script"
+  exit 0
 }
