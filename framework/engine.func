@@ -31,7 +31,7 @@ FUNC_BASE_URL="${FUNC_BASE_URL:-https://raw.githubusercontent.com/btc-jost/scrip
 
 # Ownership state: maps a package to the app id that installed it (lines "pkg=appid").
 # Overridable for tests. See set_app_id / _record_owner / the remove flow.
-_PKG_STATE_FILE="${_PKG_STATE_FILE:-/var/lib/btc-helper/packages}"
+_PKG_STATE_FILE="${_PKG_STATE_FILE:-/var/lib/btc-scripts/packages}"
 
 # ==============================================================================
 # Shared collections, app id and event registry
@@ -159,6 +159,13 @@ _record_owner() {
   mv "$tmp" "$_PKG_STATE_FILE"
 }
 
+# will_remove <pkg> - 0 if this app id owns <pkg> AND it's installed, i.e. the current
+# remove run will purge it. Components gate their config cleanup (pre_remove) on this so
+# they only delete what they wrote when the package they own is actually being removed.
+will_remove() {
+  [[ "$(_pkg_owner "$1")" == "$(get_app_id)" ]] && _pkg_installed "$1"
+}
+
 # _forget_owner <pkg>... - drop ownership entries; remove the file when empty.
 _forget_owner() {
   [[ -f "$_PKG_STATE_FILE" ]] || return 0
@@ -198,10 +205,20 @@ _apt_packages() {
 
   # Snapshot what is already installed, so we record ownership only for packages
   # this run actually installs - pre-existing ones are never owned, never purged.
-  local p preinstalled=()
+  local p preinstalled=() kept=() appid
+  appid="$(get_app_id)"
   for p in "${APP_PACKAGES[@]}"; do
     _pkg_installed "$p" && preinstalled+=("$p")
   done
+
+  # Hint: on install, name pre-existing packages this app won't own (kept on remove).
+  if [[ "$action" == "install" ]]; then
+    for p in "${preinstalled[@]}"; do
+      [[ "$(_pkg_owner "$p")" != "$appid" ]] && kept+=("$p")
+    done
+    [[ ${#kept[@]} -gt 0 ]] &&
+      msg_note "Already installed, keeping (won't be removed with '${appid}'): ${kept[*]}"
+  fi
 
   msg_info "Updating package lists"
   $STD apt-get update || true
@@ -215,8 +232,6 @@ _apt_packages() {
     return 1
   fi
 
-  local appid
-  appid="$(get_app_id)"
   for p in "${APP_PACKAGES[@]}"; do
     if [[ " ${preinstalled[*]} " != *" ${p} "* ]] && _pkg_installed "$p"; then
       _record_owner "$p" "$appid"
@@ -261,7 +276,7 @@ _remove_owned() {
   appid="$(get_app_id)"
 
   for p in "${APP_PACKAGES[@]}"; do
-    [[ "$(_pkg_owner "$p")" == "$appid" ]] && _pkg_installed "$p" && owned+=("$p")
+    will_remove "$p" && owned+=("$p")
   done
 
   if [[ ${#owned[@]} -eq 0 ]]; then

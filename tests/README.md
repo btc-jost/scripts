@@ -27,7 +27,10 @@ architecture. Key ideas:
   runs ONE `installer_run`. The core then does one batched `apt install`, one grouped
   `systemctl enable/restart`, and records package ownership.
 - **Removal** purges only the packages this app id installed (recorded in `_PKG_STATE_FILE`,
-  `pkg=appid`) and disables only the services those packages declare — pre-existing packages stay.
+  default `/var/lib/btc-scripts/packages`, lines `pkg=appid`), disables only the services those
+  packages declare, and runs each component's `pre_remove` cleanup (`will_remove <pkg>`-gated) to
+  delete the config it wrote — pre-existing packages, their services and config stay.
+- **Install** prints a `msg_note` naming any pre-existing packages it won't own (kept on remove).
 - **Prompts** are declarative (`register_question`, with an optional `title=` for a human-readable
   dialog title), rendered by a multi-step whiptail wizard, with unattended fallback to declared
   defaults. When any question is shown the wizard appends a verbose toggle and a summary/confirm page;
@@ -41,11 +44,11 @@ SM_PROXY__CUSTOMER=acme SM_PROXY__LOCATION=zrh bash tests/harness.sh zabbix/inst
 ```
 
 Stubs `apt-get`/`systemctl`/`dpkg`/`dpkg-query`/`wget`/`chronyc`/`openssl` and `setup_zabbix_repo`,
-redirects config writes under a temp dir, and asserts the batched install + grouped restart + repo
-idempotency. `apt-get`/`dpkg-query` share a simulated install DB, so an `install` run also writes the
-ownership file `installed-packages` (`pkg=appid`) as a visible artifact. It uses the real
-`run_questions` (unattended), so it also exercises the omit-when-set behaviour. Good for checking event
-ordering and composition; it does **not** prove the real package install works.
+redirects config writes (and `LOGFILE`) under a temp dir, and asserts the batched install + grouped
+restart + repo idempotency. `apt-get`/`dpkg-query` share a simulated install DB, so an `install` run
+also writes the ownership file `installed-packages` (`pkg=appid`) as a visible artifact. It uses the
+real `run_questions` (unattended), so it also exercises the omit-when-set behaviour. Good for checking
+event ordering and composition; it does **not** prove the real package install works.
 
 Each invocation uses a fresh temp tree, so a standalone `remove` run sees no prior ownership and warns
 "nothing to remove" — that's expected. To exercise the full install→remove cycle (pre-existing kept,
@@ -77,7 +80,8 @@ for linting (`apt-get install -y shellcheck`).
 3. **Standalone components** (`bash <script> install`, also `update` / `remove`):
    - `component/chrony.sh` — wizard picks Swiss pool vs custom; confirm
      `/etc/chrony/sources.d/pool-ntp-org.sources` written with `pool`/`server` lines and
-     `chronyc reload sources` succeeds.
+     `chronyc reload sources` succeeds. Also test by-variable:
+     `CHRONY__CUSTOM="ntp1.example.com,ntp2.example.com"` → no prompts, `server` lines written.
    - `component/zabbix-agent2.sh` — prompts for server (required) and hostname (default `$(hostname)`);
      confirm the Zabbix **7.4** repo is added, `zabbix-agent2` installed,
      `/etc/zabbix/zabbix_agent2.d/zabbix_agent2.conf` written, service enabled. (Unattended runs must
@@ -101,7 +105,9 @@ for linting (`apt-get install -y shellcheck`).
 
 Verify `update` and `remove` modes on at least chrony and the composite. On `remove`, only the
 packages this app id installed are purged (`systemctl stop`/`disable` for their declared services,
-then `apt purge`); pre-existing packages and packages owned by another app are left running.
+then `apt purge`) and the config they wrote is deleted (e.g. `…/zabbix_agent2.d/smartmonitoring.conf`);
+pre-existing packages, their services and config are left in place. Logs land in
+`/var/log/btc-scripts/`.
 
 ## Known follow-ups / decisions pending
 

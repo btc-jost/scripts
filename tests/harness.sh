@@ -55,6 +55,7 @@ export _CHRONY__NTP_FILE="${DRYROOT}/chrony.sources"
 export _ZABBIX_PROXY__PSK_FILE="${DRYROOT}/psk.key"
 export _ZABBIX_PROXY__DB_PATH="${DRYROOT}/zabbix-proxy.db"
 export _PKG_STATE_FILE="${DRYROOT}/installed-packages"
+export LOGFILE="${DRYROOT}/run.log" # keep silent()'s log out of /var/log in tests
 
 # Simulated dpkg state so ownership tracking is exercised: apt-get install/purge
 # mutate it and dpkg-query reads it. Seed PRE_INSTALLED="pkg1 pkg2" to pretend some

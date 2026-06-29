@@ -128,8 +128,10 @@ composite with `include_component`.
 
 chrony with a menu to pick the Swiss NTP pool or enter custom servers.
 
-Variables: `CHRONY__SOURCE` (`swiss` default, or `custom`); with `custom`, enter servers interactively.
-See [Core variables](#core-variables).
+Variables: `CHRONY__SOURCE` (`swiss` default, or `custom`); with `custom`, enter servers
+interactively. For unattended/automated runs, set `CHRONY__CUSTOM` to a comma- or space-separated
+list of NTP servers (e.g. `CHRONY__CUSTOM="ntp1.example.com,ntp2.example.com"`) — it selects the
+custom source and skips both prompts. See [Core variables](#core-variables).
 
 Install:
 
@@ -221,10 +223,10 @@ are listed with each script under [Usage](#usage).
 | `VERBOSE` | `no` | `yes`/`true`/`1` shows all command output; otherwise commands run quietly and are logged to `LOGFILE`. |
 | `WIZARD_VERBOSE_PROMPT` | `yes` | Set `no` to drop the built-in "Verbose mode" wizard step. |
 | `WIZARD_REVIEW` | `yes` | Set `no` to drop the summary/confirm wizard page. |
-| `LOGFILE` | `/tmp/btc-helper-<timestamp>.log` | Where quiet command output is logged. |
+| `LOGFILE` | `/var/log/btc-scripts/<timestamp>.log` | Where quiet command output is logged. |
 | `ZABBIX_VERSION` | per script (`7.0` / `7.4`) | Zabbix repo version used by `setup_zabbix_repo`. |
 | `FUNC_BASE_URL` | `…/btc-jost/scripts/main` | Base URL the scripts source `framework/*.func` from; point it at a branch to test it (see [Usage](#usage)). |
-| `_PKG_STATE_FILE` | `/var/lib/btc-helper/packages` | Where package ownership (`pkg=appid`) is recorded so `remove` purges only what this app installed. |
+| `_PKG_STATE_FILE` | `/var/lib/btc-scripts/packages` | Where package ownership (`pkg=appid`) is recorded so `remove` purges only what this app installed. |
 
 ### Framework and component installers
 
@@ -236,7 +238,8 @@ sourced (not executed) by the leaf scripts:
   (package + the service(s) the framework manages for it), `set_app_id`/`get_app_id`, batched
   apt/systemd default handlers, and the `installer_run` driver with `install` / `update` / `remove`
   modes. Install records which packages it actually installed (owned by the app id); `remove` purges
-  **only** those and disables only their services — pre-existing packages stay.
+  **only** those and disables only their services — pre-existing packages stay. Components clean up the
+  config they wrote in a `pre_remove` handler gated by `will_remove <pkg>`.
 - `prompt.func` — the declarative `whiptail` question wizard (omits any question whose variable is
   already set; `title=` sets a human-readable dialog title). When it shows any question it also adds a
   verbose toggle and a summary/confirm page, and numbers the steps by what's actually shown.
@@ -268,6 +271,4 @@ chrony` (presetting `CHRONY__SOURCE=swiss` to skip the prompt).
 
 ## TODO
 
-- **Save logs to `/var/log` instead of `/tmp`
-- **Chrony** implement custom NTP servers by variable
 - Permanent test and CI

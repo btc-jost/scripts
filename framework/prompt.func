@@ -107,11 +107,16 @@ _q_parse_opts() {
 }
 
 # Internal: is question $1's answer already provided (preset before the wizard)?
-# A non-empty scalar var means "omit this question, keep the value". input_list
-# answers are array-typed and are not auto-skipped this way.
+# A preset question is omitted by the wizard and kept as-is. For input_list we check
+# the named array is non-empty (a composite/env can preset it; a `configure` handler
+# may normalise a delimited string into the array first).
 _q_already_set() {
   local key="${_Q_KEYS[$1]}"
-  [[ "${_Q_TYPES[$1]}" == "input_list" ]] && return 1
+  if [[ "${_Q_TYPES[$1]}" == "input_list" ]]; then
+    local -n _ref="$key"
+    [[ ${#_ref[@]} -gt 0 ]]
+    return
+  fi
   [[ -n "${!key:-}" ]]
 }
 

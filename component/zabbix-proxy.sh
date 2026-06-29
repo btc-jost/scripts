@@ -38,9 +38,18 @@ register_question ZABBIX_PROXY__HOSTNAME input "Zabbix proxy hostname" \
   default="$(hostname)" validate=nonempty title="Proxy hostname"
 register_event_handler pre_install zabbix_proxy_pre_install
 register_event_handler post_install zabbix_proxy_post_install
+register_event_handler pre_remove zabbix_proxy_pre_remove
 
 zabbix_proxy_pre_install() {
   setup_zabbix_repo
+}
+
+# Remove the proxy conf and sqlite DB we created - only if this run purges the proxy.
+zabbix_proxy_pre_remove() {
+  will_remove zabbix-proxy-sqlite3 || return 0
+  msg_info "Removing Zabbix proxy configuration"
+  rm -f "$_ZABBIX_PROXY__CONF" "${_ZABBIX_PROXY__DB_PATH:-/var/lib/sqlite/zabbix-proxy.db}"
+  msg_ok "Removed Zabbix proxy configuration"
 }
 
 zabbix_proxy_post_install() {

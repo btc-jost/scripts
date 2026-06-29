@@ -86,7 +86,7 @@ set_std_mode() {
 }
 
 # Active log file for silent(); components may override LOGFILE before running.
-LOGFILE="${LOGFILE:-/tmp/btc-helper-$(date +%Y%m%d_%H%M%S).log}"
+LOGFILE="${LOGFILE:-/var/log/btc-scripts/$(date +%Y%m%d_%H%M%S).log}"
 
 # ------------------------------------------------------------------------------
 # silent() - run a command quietly, logging its output.
@@ -95,6 +95,7 @@ LOGFILE="${LOGFILE:-/tmp/btc-helper-$(date +%Y%m%d_%H%M%S).log}"
 # ------------------------------------------------------------------------------
 silent() {
   local cmd="$*"
+  mkdir -p "$(dirname "$LOGFILE")" 2>/dev/null || true
   "$@" >>"$LOGFILE" 2>&1
   local rc=$?
   if [[ $rc -ne 0 ]]; then
@@ -128,6 +129,14 @@ msg_error() {
 msg_warn() {
   local msg="$1"
   printf "%b\n" "${BFR}${INFO}${YWB}${msg}${CL}" >&2
+}
+
+# msg_note - an informational tip on stdout (persistent line). Unlike msg_warn it is
+# not a warning and goes to stdout; unlike msg_info it is not overwritten.
+msg_note() {
+  local msg="$1"
+  [[ -z "$msg" ]] && return
+  printf "%b\n" "${BFR}${INFO}${BL}${msg}${CL}"
 }
 
 # ------------------------------------------------------------------------------

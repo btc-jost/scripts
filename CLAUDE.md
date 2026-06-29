@@ -42,16 +42,19 @@ mini-framework, layered as single-purpose modules. Two kinds of leaf script, two
 
 Libs are sourced from `${FUNC_BASE_URL:-…/main}/framework/*.func` and carry load-once guards
 (`_CORE_FUNC_LOADED` etc.) so they can be pre-sourced locally for testing.
-- `framework/core.func` — pure utilities: colors/formatting/icons, `msg_info|ok|error|warn`,
-  `silent()` + `set_std_mode` (`STD="silent"`), `load_functions`, `shell_check`, `root_check`,
-  `is_unattended`, `exit_script`. Sourced by everything.
+- `framework/core.func` — pure utilities: colors/formatting/icons, `msg_info|ok|error|warn|note`
+  (`msg_note` = a calm stdout tip), `silent()` (logs to `LOGFILE`, default
+  `/var/log/btc-scripts/<ts>.log`) + `set_std_mode` (`STD="silent"`), `load_functions`,
+  `shell_check`, `root_check`, `is_unattended`, `exit_script`. Sourced by everything.
 - `framework/engine.func` — the installer engine: event registry (`register_event_handler`,
   `run_event`), `add_package <pkg> [svc...]` (+ legacy `add_services` for loose services),
   `set_app_id`/`get_app_id` (first-caller-wins app id), batched default handlers (one apt
   install/upgrade), and per-package **ownership tracking** (`_PKG_STATE_FILE`, lines `pkg=appid`): a
   package is recorded as owned only when this run actually installs it, so `remove` purges **only**
   the app's own packages and disables **only** the services those packages declare (via the
-  `_PKG_SERVICES` map) — pre-existing packages and their services are left alone. `installer_run`
+  `_PKG_SERVICES` map) — pre-existing packages and their services are left alone. `will_remove <pkg>`
+  exposes that "this run will purge it" test so a component's `pre_remove` handler can clean up the
+  config it wrote. `installer_run`
   orchestrates install/update/remove. Order per mode: `configure` event → `run_questions` (so a
   configure handler can pre-answer/suppress questions) → `pre_*`/`*`/`post_*`. Sources core.
 - `framework/prompt.func` — declarative question registry: `register_question <KEY> <type> <prompt>
@@ -122,4 +125,7 @@ bash -c "$(wget -O - https://raw.githubusercontent.com/btc-jost/scripts/main/zab
 - Declare a service in `add_package <pkg> <svc>` **only** when the framework must restart it to apply
   config the script wrote (e.g. the Zabbix agent/proxy). When apt's own maintainer scripts already
   manage the service (chrony, unattended-upgrades), pass just the package.
+- A component that writes config/state files should clean them up in a `pre_remove` handler gated by
+  `will_remove <its pkg>`, so the files go only when that package is actually purged (not when it's
+  kept because pre-existing or owned by another app).
 - Every script begins with the standard GPL-3.0 header block.

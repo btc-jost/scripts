@@ -33,7 +33,18 @@ register_question CHRONY__SOURCE menu "Select the NTP time source" default=swiss
   "custom=User defined servers"
 register_question CHRONY__CUSTOM input_list "Enter an NTP server (leave empty to finish)" \
   when=CHRONY__SOURCE=custom title="NTP servers"
+register_event_handler configure chrony_configure
 register_event_handler post_install chrony_post_install
+register_event_handler pre_remove chrony_pre_remove
+
+# Accept custom servers from a variable: CHRONY__CUSTOM may be set (env/composite) as a
+# comma/space separated string. Normalise it to an array and select the custom source,
+# so both wizard steps are skipped (the menu is preset, the list is already non-empty).
+chrony_configure() {
+  [[ -z "${CHRONY__CUSTOM:-}" ]] && return 0
+  read -ra CHRONY__CUSTOM <<<"${CHRONY__CUSTOM//,/ }"
+  CHRONY__SOURCE="${CHRONY__SOURCE:-custom}"
+}
 
 chrony_post_install() {
   local sources=()
@@ -56,6 +67,15 @@ chrony_post_install() {
   printf '%s\n' "${sources[@]}" >"$_CHRONY__NTP_FILE"
   $STD chronyc reload sources || true
   msg_ok "Configured NTP sources"
+}
+
+# Remove the NTP sources file we wrote - only if this run actually purges chrony.
+chrony_pre_remove() {
+  will_remove chrony || return 0
+  msg_info "Removing NTP sources file"
+  rm -f "$_CHRONY__NTP_FILE"
+  $STD chronyc reload sources || true
+  msg_ok "Removed NTP sources file"
 }
 
 installer_run "$@"

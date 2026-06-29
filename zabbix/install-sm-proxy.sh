@@ -54,6 +54,7 @@ register_question SM_PROXY__CUSTOMER input "Set customer name" validate=alnum ti
 register_question SM_PROXY__LOCATION input "Set location" validate=alnum title=Location
 register_event_handler pre_install smproxy_pre_install
 register_event_handler post_install smproxy_post_install
+register_event_handler pre_remove smproxy_pre_remove
 
 # generate_psk [keyfile] - create a 256-byte hex PSK if one does not exist.
 # Inlined here (single-use): only this composite generates a PSK. Idempotent.
@@ -76,6 +77,15 @@ smproxy_pre_install() {
   ZABBIX_AGENT2__HOSTNAME="$hn"
   ZABBIX_PROXY__HOSTNAME="$hn"
   generate_psk "$_ZABBIX_PROXY__PSK_FILE"
+}
+
+# Remove the PSK we generated - only if this run actually purges the proxy package.
+# (The included components clean up their own confs via their pre_remove handlers.)
+smproxy_pre_remove() {
+  will_remove zabbix-proxy-sqlite3 || return 0
+  msg_info "Removing PSK key"
+  rm -f "$_ZABBIX_PROXY__PSK_FILE"
+  msg_ok "Removed PSK key"
 }
 
 smproxy_post_install() {

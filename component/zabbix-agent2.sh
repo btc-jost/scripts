@@ -37,9 +37,18 @@ register_question ZABBIX_AGENT2__HOSTNAME input "Zabbix agent hostname" \
   default="$(hostname)" validate=nonempty title="Agent hostname"
 register_event_handler pre_install zabbix_agent2_pre_install
 register_event_handler post_install zabbix_agent2_post_install
+register_event_handler pre_remove zabbix_agent2_pre_remove
 
 zabbix_agent2_pre_install() {
   setup_zabbix_repo
+}
+
+# Remove the agent2 conf we wrote - only if this run actually purges zabbix-agent2.
+zabbix_agent2_pre_remove() {
+  will_remove zabbix-agent2 || return 0
+  msg_info "Removing agent2 configuration"
+  rm -f "$_ZABBIX_AGENT2__CONF"
+  msg_ok "Removed agent2 configuration"
 }
 
 zabbix_agent2_post_install() {
