@@ -71,10 +71,12 @@ for linting (`apt-get install -y shellcheck`).
    (libs carry `# shellcheck shell=bash`). **Status (shellcheck 0.11.0):** clean after the
    flatten/re-layer/rename refactor.
 2. **Branch sourcing:** these scripts source siblings from `${FUNC_BASE_URL}/framework|component/...`.
-   This branch is `dev-framework`. To test the pushed branch end-to-end via the canonical pipe:
+   This branch is `dev-framework`. To test the pushed branch end-to-end (same `FUNC_BASE_URL` so the
+   libs come from the branch too):
    ```bash
    export FUNC_BASE_URL=https://raw.githubusercontent.com/btc-jost/scripts/dev-framework
-   wget -O - "$FUNC_BASE_URL/component/chrony.sh" | bash -s install
+   bash -c "$(wget -O - "$FUNC_BASE_URL/component/chrony.sh")"          # install (default)
+   bash -c "$(wget -O - "$FUNC_BASE_URL/component/chrony.sh")" -- remove
    ```
    To test the working tree directly without pushing, run files in place:
    `sudo bash component/chrony.sh install` (it still pulls libs from `FUNC_BASE_URL` unless you set
@@ -121,7 +123,9 @@ pre-existing packages, their services and config are left in place. Logs land in
   `add_service` → `add_services`. The `<slug>_register()` wrapper + `_COMPOSING` guard are gone
   (components are flat; the engine owns the compose decision in `installer_run`). Swiss NTP now goes
   through the chrony component (`include_component chrony`, `CHRONY__SOURCE=swiss`), so the old
-  `configure_swiss_ntp` composite helper was dropped.
+  `configure_swiss_ntp` composite helper was dropped. (Since further evolved: `add_packages`/
+  `add_services` → `add_package <pkg> [svc...]`; `component-tools.func` removed — `setup_zabbix_repo`
+  became the `zabbix-release` component; `include_component` moved into `engine.func`.)
 - `zabbix/install-sm-proxy.sh` no longer has its old hand-built wizard; customer/location now go
   through the declarative prompt registry. The verbose toggle + summary/confirm pages from the old
   `main` script are back as framework-wide built-ins (see prompt.func / CLAUDE.md). The interactive

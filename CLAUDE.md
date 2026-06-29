@@ -2,21 +2,21 @@
 
 A collection of **Bash provisioning / post-install scripts** for btc.jost AG infrastructure —
 Debian/Ubuntu hosts and Proxmox/LXC containers. They bootstrap monitoring (Zabbix), time sync
-(chrony) and 3CX servers. Designed to be piped straight into a root shell from GitHub raw URLs.
+(chrony) and 3CX servers. Run from GitHub raw in a root shell via `bash -c "$(wget …)"` (see How to run).
 
 License: GPL-3.0 (see `LICENSE`); every script carries the GPL header. Author: Simon Gilli / btc.jost AG.
 
 ## Inventory
 
-Standalone scripts (each runnable on its own):
-- `3cx/post-install.sh` — after a fresh 3CX install on Debian: a framework component that adds the
-  Zabbix repo, installs + configures `zabbix-agent2` (Server `192.168.72.5`) and chrony with the
-  Swiss NTP pool.
+Top-level **composites** (each runnable on its own):
+- `3cx/post-install.sh` — after a fresh 3CX install on Debian: composes `zabbix-agent2`
+  (Server `192.168.72.5`, which pulls in `zabbix-release` for the Zabbix repo) + chrony (Swiss NTP).
 - `zabbix/install-sm-proxy.sh` — install a **SmartMonitoring proxy** (Zabbix 7.0) on Debian/Ubuntu.
-  A **composite**: `include_component zabbix-agent2` + `zabbix-proxy`, then a customer/location wizard
-  (→ hostname `<customer>-proxy-<location>`), PSK and Swiss NTP. The whole thing runs as one combined
-  lifecycle (single `apt install`, grouped service restart).
-- `proxmox/post-install.sh` — framework component: chrony (Swiss NTP) + unattended-upgrades.
+  Composes `zabbix-agent2` + `zabbix-proxy` (+ `zabbix-release`, `chrony`), then a customer/location
+  wizard (→ hostname `<customer>-proxy-<location>`), PSK and Swiss NTP. The whole thing runs as one
+  combined lifecycle (single `apt install`, grouped service restart).
+- `proxmox/post-install.sh` — composes `zabbix-agent2` (+ `zabbix-release`) + chrony (Swiss NTP) and
+  adds `unattended-upgrades`.
 
 `framework/` — sourced Bash libraries (`.func`, `# shellcheck shell=bash`): an event-driven installer
 mini-framework, layered as single-purpose modules. Two kinds of leaf script, two entry points:
