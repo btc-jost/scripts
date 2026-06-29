@@ -29,21 +29,30 @@ FUNC_BASE_URL="${FUNC_BASE_URL:-https://raw.githubusercontent.com/btc-jost/scrip
 # shellcheck disable=SC1090
 [[ -n "${_CORE_FUNC_LOADED:-}" ]] || source <(wget -qO- "${FUNC_BASE_URL}/framework/core.func")
 
+# Ownership state: maps a package to the app id that installed it (lines "pkg=appid").
+# Overridable for tests. See set_app_id / _record_owner / the remove flow.
+_PKG_STATE_FILE="${_PKG_STATE_FILE:-/var/lib/btc-helper/packages}"
+
 # ==============================================================================
-# Shared collections and event registry
+# Shared collections, app id and event registry
 # ==============================================================================
 #
 # A run accumulates ONE package collection and ONE service collection, however
-# many components take part. Components never assign these arrays - they only
-# enhance them via add_packages / add_services. The core then does the heavy work
-# once: a single apt install, a single grouped service enable/restart.
+# many components take part. Components never assign these arrays directly - they
+# enhance them via add_package (and the rare add_services). The core then does the
+# heavy work once: a single apt install and a single grouped service enable/restart.
+#
+# _PKG_SERVICES maps a package to the service(s) the framework must manage for it,
+# so removal can disable exactly the services of the packages it actually purges.
 #
 # variables_init() runs at source time, before any component registers handlers
-# or adds packages, so the arrays exist for the first add_* / register call.
+# or adds packages, so the collections exist for the first add_* / register call.
 # ------------------------------------------------------------------------------
 variables_init() {
   declare -ga APP_PACKAGES=()
   declare -ga APP_SERVICES=()
+  declare -ga _LOOSE_SERVICES=() # services added without a package (add_services)
+  declare -gA _PKG_SERVICES=()   # package -> space-joined service(s)
   declare -gA _EVENT_HANDLERS=()
   _EVENT_NAMES=(
     "configure"
@@ -54,14 +63,44 @@ variables_init() {
 }
 variables_init
 
-# add_packages <pkg>... - enhance the shared package collection.
-add_packages() {
-  APP_PACKAGES+=("$@")
+# ------------------------------------------------------------------------------
+# set_app_id <id> / get_app_id
+# Identify which component/composite "owns" the packages installed in this run.
+# set_app_id is FIRST-CALLER-WINS: a composite sets its id before include_component,
+# so the components it pulls in (which call set_app_id too) defer to the composite -
+# packages installed during a composite run are owned by the composite.
+# ------------------------------------------------------------------------------
+set_app_id() {
+  [[ -z "${_APP_ID:-}" ]] && _APP_ID="$1"
+  return 0
 }
 
-# add_services <svc>... - enhance the shared service collection.
+get_app_id() {
+  printf '%s' "${_APP_ID:-default}"
+}
+
+# ------------------------------------------------------------------------------
+# add_package <pkg> [service...] - add a package to the batched install, optionally
+# with the systemd service(s) the framework must manage for it (enabled on install,
+# disabled when the package is removed). Omit the service when apt's own maintainer
+# scripts already handle it (e.g. chrony, unattended-upgrades) - only declare one
+# when we must restart it to apply config we wrote (e.g. the Zabbix agent/proxy).
+# ------------------------------------------------------------------------------
+add_package() {
+  local pkg="$1"
+  shift
+  APP_PACKAGES+=("$pkg")
+  if [[ $# -gt 0 ]]; then
+    APP_SERVICES+=("$@")
+    _PKG_SERVICES["$pkg"]="$*"
+  fi
+}
+
+# add_services <svc>... - register service(s) NOT tied to a package (rare). They are
+# enabled on install and disabled on remove whenever this app removes any package.
 add_services() {
   APP_SERVICES+=("$@")
+  _LOOSE_SERVICES+=("$@")
 }
 
 # register_event_handler <event> <function>
@@ -85,12 +124,67 @@ run_event() {
 }
 
 # ==============================================================================
+# Package ownership tracking
+# ==============================================================================
+
+# _pkg_installed <pkg> - 0 if dpkg reports the package installed.
+_pkg_installed() {
+  dpkg-query -W -f='${Status}' "$1" 2>/dev/null | grep -q "ok installed"
+}
+
+# _pkg_owner <pkg> - print the app id that owns <pkg> (empty if unowned).
+_pkg_owner() {
+  [[ -f "$_PKG_STATE_FILE" ]] || return 0
+  local line
+  while IFS= read -r line; do
+    if [[ "${line%%=*}" == "$1" ]]; then
+      printf '%s' "${line#*=}"
+      return 0
+    fi
+  done <"$_PKG_STATE_FILE"
+}
+
+# _record_owner <pkg> <appid> - set/replace ownership of <pkg>.
+_record_owner() {
+  local pkg="$1" appid="$2" tmp line
+  mkdir -p "$(dirname "$_PKG_STATE_FILE")"
+  tmp="$(mktemp)"
+  if [[ -f "$_PKG_STATE_FILE" ]]; then
+    while IFS= read -r line; do
+      [[ "${line%%=*}" == "$pkg" ]] && continue
+      printf '%s\n' "$line"
+    done <"$_PKG_STATE_FILE" >"$tmp"
+  fi
+  printf '%s=%s\n' "$pkg" "$appid" >>"$tmp"
+  mv "$tmp" "$_PKG_STATE_FILE"
+}
+
+# _forget_owner <pkg>... - drop ownership entries; remove the file when empty.
+_forget_owner() {
+  [[ -f "$_PKG_STATE_FILE" ]] || return 0
+  local -A drop=()
+  local p line tmp
+  for p in "$@"; do drop["$p"]=1; done
+  tmp="$(mktemp)"
+  while IFS= read -r line; do
+    [[ -n "${drop[${line%%=*}]:-}" ]] && continue
+    printf '%s\n' "$line"
+  done <"$_PKG_STATE_FILE" >"$tmp"
+  if [[ -s "$tmp" ]]; then
+    mv "$tmp" "$_PKG_STATE_FILE"
+  else
+    rm -f "$tmp" "$_PKG_STATE_FILE"
+  fi
+}
+
+# ==============================================================================
 # Built-in default handlers (orchestrated by installer_run, not registered)
 # ==============================================================================
 
 # _apt_packages <action> - install or upgrade the whole APP_PACKAGES collection in
 # one batched apt run. <action> is "install" (apt-get install -y) or "upgrade"
-# (apt-get install --only-upgrade -y). No-op when nothing was added.
+# (apt-get install --only-upgrade -y). Records ownership for packages this run
+# actually installs (not pre-existing ones). No-op when nothing was added.
 _apt_packages() {
   local action="$1"
   [[ ${#APP_PACKAGES[@]} -eq 0 ]] && return 0
@@ -101,6 +195,13 @@ _apt_packages() {
     upgrade) gerund="Upgrading" past="Upgraded" flags=(--only-upgrade -y) ;;
     *) msg_error "Unknown apt action: ${action}"; return 1 ;;
   esac
+
+  # Snapshot what is already installed, so we record ownership only for packages
+  # this run actually installs - pre-existing ones are never owned, never purged.
+  local p preinstalled=()
+  for p in "${APP_PACKAGES[@]}"; do
+    _pkg_installed "$p" && preinstalled+=("$p")
+  done
 
   msg_info "Updating package lists"
   $STD apt-get update || true
@@ -113,8 +214,17 @@ _apt_packages() {
     msg_error "Failed to ${action} packages: ${APP_PACKAGES[*]}"
     return 1
   fi
+
+  local appid
+  appid="$(get_app_id)"
+  for p in "${APP_PACKAGES[@]}"; do
+    if [[ " ${preinstalled[*]} " != *" ${p} "* ]] && _pkg_installed "$p"; then
+      _record_owner "$p" "$appid"
+    fi
+  done
 }
 
+# _enable_services - grouped enable + restart of all APP_SERVICES (install/update).
 _enable_services() {
   [[ ${#APP_SERVICES[@]} -eq 0 ]] && return 0
   msg_info "Enabling services: ${APP_SERVICES[*]}"
@@ -123,21 +233,51 @@ _enable_services() {
   msg_ok "Enabled services: ${APP_SERVICES[*]}"
 }
 
+# _disable_services <svc>... - stop then disable the given services (mirror of
+# _enable_services' enable -> start). No-op with no args.
 _disable_services() {
-  [[ ${#APP_SERVICES[@]} -eq 0 ]] && return 0
-  msg_info "Disabling services: ${APP_SERVICES[*]}"
-  # Mirror of _enable_services (enable -> start): stop first, then disable.
-  $STD systemctl stop "${APP_SERVICES[@]}" || true
-  $STD systemctl disable "${APP_SERVICES[@]}" || true
-  msg_ok "Disabled services: ${APP_SERVICES[*]}"
+  [[ $# -eq 0 ]] && return 0
+  msg_info "Disabling services: $*"
+  $STD systemctl stop "$@" || true
+  $STD systemctl disable "$@" || true
+  msg_ok "Disabled services: $*"
 }
 
+# _purge_packages <pkg>... - purge the given packages + autoremove. No-op with no args.
 _purge_packages() {
-  [[ ${#APP_PACKAGES[@]} -eq 0 ]] && return 0
-  msg_info "Removing packages: ${APP_PACKAGES[*]}"
-  $STD apt-get purge -y "${APP_PACKAGES[@]}" || true
+  [[ $# -eq 0 ]] && return 0
+  msg_info "Removing packages: $*"
+  $STD apt-get purge -y "$@" || true
   $STD apt-get autoremove -y || true
-  msg_ok "Removed packages: ${APP_PACKAGES[*]}"
+  msg_ok "Removed packages: $*"
+}
+
+# _remove_owned - the remove built-in. Purge only packages this app installed (still
+# present) and disable the services they provide; pre-existing packages and packages
+# owned by another app/composite (and their services) are left untouched.
+_remove_owned() {
+  [[ ${#APP_PACKAGES[@]} -eq 0 ]] && return 0
+  local appid p svc owned=() services=()
+  appid="$(get_app_id)"
+
+  for p in "${APP_PACKAGES[@]}"; do
+    [[ "$(_pkg_owner "$p")" == "$appid" ]] && _pkg_installed "$p" && owned+=("$p")
+  done
+
+  if [[ ${#owned[@]} -eq 0 ]]; then
+    msg_warn "No packages installed by '${appid}' to remove; keeping everything"
+    return 0
+  fi
+
+  # Disable only the services of the packages we're actually purging (+ loose ones).
+  for p in "${owned[@]}"; do
+    for svc in ${_PKG_SERVICES["$p"]:-}; do services+=("$svc"); done
+  done
+  [[ ${#_LOOSE_SERVICES[@]} -gt 0 ]] && services+=("${_LOOSE_SERVICES[@]}")
+
+  _disable_services "${services[@]}"
+  _purge_packages "${owned[@]}"
+  _forget_owner "${owned[@]}"
 }
 
 # ------------------------------------------------------------------------------
@@ -201,9 +341,8 @@ installer_run() {
       ;;
     remove)
       run_event pre_remove
-      _disable_services
+      _remove_owned # built-in: purge only this app's packages, disable their services
       run_event remove
-      _purge_packages
       run_event post_remove
       ;;
     *)

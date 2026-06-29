@@ -54,11 +54,47 @@ export _ZABBIX_PROXY__CONF="${DRYROOT}/proxy.conf"
 export _CHRONY__NTP_FILE="${DRYROOT}/chrony.sources"
 export _ZABBIX_PROXY__PSK_FILE="${DRYROOT}/psk.key"
 export _ZABBIX_PROXY__DB_PATH="${DRYROOT}/zabbix-proxy.db"
+export _PKG_STATE_FILE="${DRYROOT}/installed-packages"
+
+# Simulated dpkg state so ownership tracking is exercised: apt-get install/purge
+# mutate it and dpkg-query reads it. Seed PRE_INSTALLED="pkg1 pkg2" to pretend some
+# packages already exist (they must then survive a remove).
+_INSTALLED_DB="${DRYROOT}/.installed"
+# shellcheck disable=SC2086  # intentional word-split: one package per line
+printf '%s\n' ${PRE_INSTALLED:-} >"$_INSTALLED_DB"
 
 # --- stub system mutations and external helpers ------------------------------
-apt-get() { echo "    [apt-get $*]"; }
+apt-get() {
+  echo "    [apt-get $*]"
+  local sub="$1" a only_upgrade=0 tmp
+  shift || true
+  case "$sub" in
+    install)
+      for a in "$@"; do [[ "$a" == "--only-upgrade" ]] && only_upgrade=1; done
+      for a in "$@"; do
+        [[ "$a" == -* ]] && continue
+        grep -qxF "$a" "$_INSTALLED_DB" && continue
+        [[ $only_upgrade -eq 1 ]] && continue # --only-upgrade won't install missing
+        echo "$a" >>"$_INSTALLED_DB"
+      done
+      ;;
+    purge)
+      tmp="$(mktemp)"; cp "$_INSTALLED_DB" "$tmp"
+      for a in "$@"; do
+        [[ "$a" == -* ]] && continue
+        grep -vxF "$a" "$tmp" >"${tmp}.2" 2>/dev/null && mv "${tmp}.2" "$tmp"
+      done
+      mv "$tmp" "$_INSTALLED_DB"
+      ;;
+  esac
+}
 systemctl() { echo "    [systemctl $*]"; }
 dpkg() { echo "    [dpkg $*]"; }
+dpkg-query() { # ... <pkg> (last arg); print Status + succeed if "installed"
+  local pkg="${!#}"
+  grep -qxF "$pkg" "$_INSTALLED_DB" && { echo "install ok installed"; return 0; }
+  return 1
+}
 wget() { echo "    [wget $*]" >&2; }
 chronyc() { echo "    [chronyc $*]"; }
 openssl() { echo "DRYRUN-PSK-$(date +%s)"; }

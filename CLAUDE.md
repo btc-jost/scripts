@@ -22,20 +22,23 @@ Standalone scripts (each runnable on its own):
 mini-framework, layered as single-purpose modules. Two kinds of leaf script, two entry points:
 - A **component** (in `component/`) sources `component.func` and is a **flat** script with a fixed
   section order: **contract vars** (with `:-` defaults so a composite can override, e.g.
-  `ZABBIX_VERSION`) → **func calls** (`add_packages`/`add_services` + `register_question`/
-  `register_event_handler`, which run at source time) → plain **funcs** → **event funcs** (the
-  handler definitions) → `installer_run "$@"`. Components never assign `APP_PACKAGES`/`APP_SERVICES`;
-  they only add. All real work sits in event handlers. There is **no** `<slug>_register()` wrapper and
-  **no** `_COMPOSING` guard — the framework owns the compose decision (`installer_run` no-ops when
-  `_COMPOSING` is set). Each component `register_question`s the config values it needs; a value preset
-  before the wizard is not asked. Composites follow the same section order.
-- **Composition:** a **composite** (top-level script) sources `composite.func`, sets a component's
-  contract vars **first**, then calls `include_component <slug>` (sources a sibling under
-  `_COMPOSING`, so the sibling's registrations run while its trailing `installer_run` no-ops), adds
-  its own questions/handlers, and calls ONE `installer_run`. The core then does the heavy work once
-  for the whole run: a single batched `apt install` of `APP_PACKAGES`, one grouped
-  `systemctl enable/restart` of `APP_SERVICES`. **Ordering matters:** contract vars must precede the
-  matching `include_component`, since the component reads them at source time.
+  `ZABBIX_VERSION`) → **func calls** (`set_app_id <slug>` + `add_package <pkg> [svc...]` +
+  `register_question`/`register_event_handler`, which run at source time) → plain **funcs** → **event
+  funcs** (the handler definitions) → `installer_run "$@"`. Components go through framework funcs only —
+  they never read/write framework globals (`APP_PACKAGES`/`APP_SERVICES`/`_APP_ID`) directly. All real
+  work sits in event handlers. There is **no** `<slug>_register()` wrapper and **no** `_COMPOSING`
+  guard — the framework owns the compose decision (`installer_run` no-ops when `_COMPOSING` is set).
+  Each component `register_question`s the config values it needs; a value preset before the wizard is
+  not asked. Composites follow the same section order.
+- **Composition:** a **composite** (top-level script) sources `composite.func`, calls
+  `set_app_id <slug>` and sets a component's contract vars **first**, then calls
+  `include_component <slug>` (sources a sibling under `_COMPOSING`, so the sibling's registrations run
+  while its trailing `installer_run` no-ops), adds its own questions/handlers, and calls ONE
+  `installer_run`. Because `set_app_id` is first-caller-wins, the composite's id wins over the
+  components' — packages installed in the run are owned by the composite. The core then does the heavy
+  work once: a single batched `apt install`, one grouped `systemctl enable/restart` of the declared
+  services, and ownership recording. **Ordering matters:** `set_app_id` and contract vars must precede
+  the matching `include_component`, since the component reads them at source time.
 
 Libs are sourced from `${FUNC_BASE_URL:-…/main}/framework/*.func` and carry load-once guards
 (`_CORE_FUNC_LOADED` etc.) so they can be pre-sourced locally for testing.
@@ -43,9 +46,13 @@ Libs are sourced from `${FUNC_BASE_URL:-…/main}/framework/*.func` and carry lo
   `silent()` + `set_std_mode` (`STD="silent"`), `load_functions`, `shell_check`, `root_check`,
   `is_unattended`, `exit_script`. Sourced by everything.
 - `framework/engine.func` — the installer engine: event registry (`register_event_handler`,
-  `run_event`), `add_packages`/`add_services` accumulators, batched default handlers (install/upgrade/
-  purge of `APP_PACKAGES`, grouped enable/disable of `APP_SERVICES`), and `installer_run`
-  orchestrating install/update/remove. Order per mode: `configure` event → `run_questions` (so a
+  `run_event`), `add_package <pkg> [svc...]` (+ legacy `add_services` for loose services),
+  `set_app_id`/`get_app_id` (first-caller-wins app id), batched default handlers (one apt
+  install/upgrade), and per-package **ownership tracking** (`_PKG_STATE_FILE`, lines `pkg=appid`): a
+  package is recorded as owned only when this run actually installs it, so `remove` purges **only**
+  the app's own packages and disables **only** the services those packages declare (via the
+  `_PKG_SERVICES` map) — pre-existing packages and their services are left alone. `installer_run`
+  orchestrates install/update/remove. Order per mode: `configure` event → `run_questions` (so a
   configure handler can pre-answer/suppress questions) → `pre_*`/`*`/`post_*`. Sources core.
 - `framework/prompt.func` — declarative question registry: `register_question <KEY> <type> <prompt>
   [opts]` (`input`/`menu`/`yesno`/`input_list`, with `default=`/`validate=`/`when=`/`title=`);
@@ -102,9 +109,17 @@ bash -c "$(wget -O - https://raw.githubusercontent.com/btc-jost/scripts/main/zab
   where needed). Recommended VS Code extensions in `.vscode/extensions.json`: shellcheck, shell-format,
   shell-syntax, markdownlint, editorconfig.
 - Naming: `<area>/<verb>-<thing>.sh`; event handlers follow `<module>_<event>` (e.g. `chrony_post_install`).
+  App ids are folder-qualified for composites (`3cx-post-install`, `zabbix-install-sm-proxy`,
+  `proxmox-post-install`) since basenames repeat; component ids are their slug (`chrony`).
 - Variables are `<MODULE>__<NAME>` — the module name in caps (`CHRONY`, `ZABBIX_AGENT2`,
   `ZABBIX_PROXY`, `SM_PROXY`) joined to the name by a **double underscore**. A **leading `_`** marks an
   internal/script-only var (`_ZABBIX_PROXY__CONF`); without the leading `_` it is a wizard input used
   in a `register_question` call (`ZABBIX_AGENT2__SERVER`). Exception: `ZABBIX_VERSION` is a single
   shared var read by `setup_zabbix_repo`.
+- **Don't access framework globals directly** from components/composites — use the funcs
+  (`add_package`, `add_services`, `register_question`, `register_event_handler`,
+  `set_app_id`/`get_app_id`). The engine owns `APP_PACKAGES`/`APP_SERVICES`/`_APP_ID`/`_PKG_SERVICES`.
+- Declare a service in `add_package <pkg> <svc>` **only** when the framework must restart it to apply
+  config the script wrote (e.g. the Zabbix agent/proxy). When apt's own maintainer scripts already
+  manage the service (chrony, unattended-upgrades), pass just the package.
 - Every script begins with the standard GPL-3.0 header block.

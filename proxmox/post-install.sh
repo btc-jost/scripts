@@ -29,11 +29,13 @@ ZABBIX_AGENT2__HOSTNAME="${ZABBIX_AGENT2__HOSTNAME:-$(hostname)}"
 # Swiss NTP comes from the chrony component; preset its source to skip the prompt.
 CHRONY__SOURCE="${CHRONY__SOURCE:-swiss}"
 
+# Own the packages installed in this run (first caller wins -> beats the components').
+set_app_id proxmox-post-install
+
 include_component zabbix-agent2
 include_component chrony
-# unattended-upgrades is installed in the batched apt run and enabled/restarted by
-# the engine's grouped service step - no dedicated handler needed.
-add_packages unattended-upgrades
-add_services unattended-upgrades
+# No service: the unattended-upgrades package's own maintainer scripts enable its
+# service/timers, so the framework needs no service handling (same as chrony).
+add_package unattended-upgrades
 
 installer_run "$@"

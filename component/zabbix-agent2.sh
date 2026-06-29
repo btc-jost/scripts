@@ -27,8 +27,9 @@ FUNC_BASE_URL="${FUNC_BASE_URL:-https://raw.githubusercontent.com/btc-jost/scrip
 _ZABBIX_AGENT2__CONF="${_ZABBIX_AGENT2__CONF:-/etc/zabbix/zabbix_agent2.d/zabbix_agent2.conf}"
 ZABBIX_VERSION="${ZABBIX_VERSION:-7.4}"
 
-add_packages zabbix-agent2
-add_services zabbix-agent2
+set_app_id zabbix-agent2
+# Service declared: the framework restarts it to apply the Server=/Hostname= conf we write.
+add_package zabbix-agent2 zabbix-agent2
 # A composite that pins these beforehand suppresses the matching question automatically.
 register_question ZABBIX_AGENT2__SERVER input "Zabbix proxy / server address" validate=nonempty \
   title="Zabbix server"

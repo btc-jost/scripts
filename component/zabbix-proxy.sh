@@ -28,8 +28,9 @@ FUNC_BASE_URL="${FUNC_BASE_URL:-https://raw.githubusercontent.com/btc-jost/scrip
 _ZABBIX_PROXY__CONF="${_ZABBIX_PROXY__CONF:-/etc/zabbix/zabbix_proxy.d/zabbix-proxy.conf}"
 ZABBIX_VERSION="${ZABBIX_VERSION:-7.4}"
 
-add_packages zabbix-proxy-sqlite3
-add_services zabbix-proxy
+set_app_id zabbix-proxy
+# Service declared: the framework restarts it to apply the proxy conf we write.
+add_package zabbix-proxy-sqlite3 zabbix-proxy
 # A composite that pins these beforehand suppresses the matching question automatically.
 register_question ZABBIX_PROXY__SERVER input "Zabbix server address" validate=nonempty \
   title="Zabbix server"

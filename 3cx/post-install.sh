@@ -31,6 +31,9 @@ ZABBIX_VERSION="${ZABBIX_VERSION:-7.4}"
 ZABBIX_AGENT2__SERVER="${ZABBIX_AGENT2__SERVER:-192.168.72.5}"
 CHRONY__SOURCE="${CHRONY__SOURCE:-swiss}"
 
+# Own the packages installed in this run (first caller wins -> beats the components').
+set_app_id 3cx-post-install
+
 include_component zabbix-agent2
 include_component chrony
 

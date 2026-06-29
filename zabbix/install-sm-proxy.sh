@@ -44,6 +44,9 @@ _ZABBIX_AGENT2__CONF="${_ZABBIX_AGENT2__CONF:-/etc/zabbix/zabbix_agent2.d/smartm
 _ZABBIX_PROXY__CONF="${_ZABBIX_PROXY__CONF:-/etc/zabbix/zabbix_proxy.d/smartmonitoring.conf}"
 CHRONY__SOURCE="${CHRONY__SOURCE:-swiss}"
 
+# Own the packages installed in this run (first caller wins -> beats the components').
+set_app_id zabbix-install-sm-proxy
+
 include_component zabbix-agent2
 include_component zabbix-proxy
 include_component chrony

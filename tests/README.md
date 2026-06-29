@@ -14,15 +14,20 @@ component units under `component/`, and composites (`zabbix/install-sm-proxy.sh`
 architecture. Key ideas:
 
 - A **component** sources `component.func` and is a **flat** script with a fixed section order:
-  contract vars → func calls (`add_packages`/`add_services` + `register_question`/
-  `register_event_handler`, run at source time) → plain funcs → event funcs (handler defs) →
-  `installer_run "$@"`. No `<slug>_register()` wrapper and no `_COMPOSING` guard — the engine no-ops
-  `installer_run` when `_COMPOSING` is set. A question whose var is already set (composite preset,
-  env, or a `configure` handler) is omitted by the wizard.
-- **Composition:** a composite sources `composite.func`, sets a component's contract vars **first**,
+  contract vars → func calls (`set_app_id <slug>` + `add_package <pkg> [svc...]` +
+  `register_question`/`register_event_handler`, run at source time) → plain funcs → event funcs
+  (handler defs) → `installer_run "$@"`. No `<slug>_register()` wrapper and no `_COMPOSING` guard — the
+  engine no-ops `installer_run` when `_COMPOSING` is set. A question whose var is already set (composite
+  preset, env, or a `configure` handler) is omitted by the wizard. Declare a service in `add_package`
+  only when the framework must restart it to apply written config (Zabbix); apt manages chrony/
+  unattended-upgrades itself.
+- **Composition:** a composite sources `composite.func`, calls `set_app_id <slug>` and sets a
+  component's contract vars **first** (first-caller-wins → the composite owns the run's packages),
   calls `include_component <slug>` (sources a sibling under `_COMPOSING`), adds its own steps, and
-  runs ONE `installer_run`. The core then does one batched `apt install` and one grouped
-  `systemctl enable/restart`.
+  runs ONE `installer_run`. The core then does one batched `apt install`, one grouped
+  `systemctl enable/restart`, and records package ownership.
+- **Removal** purges only the packages this app id installed (recorded in `_PKG_STATE_FILE`,
+  `pkg=appid`) and disables only the services those packages declare — pre-existing packages stay.
 - **Prompts** are declarative (`register_question`, with an optional `title=` for a human-readable
   dialog title), rendered by a multi-step whiptail wizard, with unattended fallback to declared
   defaults. When any question is shown the wizard appends a verbose toggle and a summary/confirm page;
@@ -35,11 +40,17 @@ bash tests/harness.sh <script> [mode]
 SM_PROXY__CUSTOMER=acme SM_PROXY__LOCATION=zrh bash tests/harness.sh zabbix/install-sm-proxy.sh install
 ```
 
-Stubs `apt-get`/`systemctl`/`dpkg`/`wget`/`chronyc`/`openssl` and `setup_zabbix_repo`, redirects
-config writes under a temp dir, and asserts the batched install + grouped restart + repo
-idempotency. It uses the real `run_questions` (unattended), so it also exercises the omit-when-set
-behaviour. Good for checking event ordering and composition; it
-does **not** prove the real package install works.
+Stubs `apt-get`/`systemctl`/`dpkg`/`dpkg-query`/`wget`/`chronyc`/`openssl` and `setup_zabbix_repo`,
+redirects config writes under a temp dir, and asserts the batched install + grouped restart + repo
+idempotency. `apt-get`/`dpkg-query` share a simulated install DB, so an `install` run also writes the
+ownership file `installed-packages` (`pkg=appid`) as a visible artifact. It uses the real
+`run_questions` (unattended), so it also exercises the omit-when-set behaviour. Good for checking event
+ordering and composition; it does **not** prove the real package install works.
+
+Each invocation uses a fresh temp tree, so a standalone `remove` run sees no prior ownership and warns
+"nothing to remove" — that's expected. To exercise the full install→remove cycle (pre-existing kept,
+only owned services disabled), drive the engine directly with stubs and a stable `_PKG_STATE_FILE`;
+seed `PRE_INSTALLED="pkg ..."` to pretend packages already exist.
 
 Quick syntax sweep:
 ```bash
@@ -83,12 +94,14 @@ for linting (`apt-get install -y shellcheck`).
    - Swiss NTP configured; PSK printed at the end; `zabbix-agent2` + `zabbix-proxy` restarted together.
 5. **`3cx/post-install.sh install`** — composite including agent2 + chrony at repo **7.4**; verify the
    single batched install of `zabbix-agent2 chrony` and the Swiss NTP pool from the chrony component.
-6. **`proxmox/post-install.sh install`** — agent2 + chrony + unattended-upgrades installed, all three
-   enabled/restarted in one grouped step. Note: this composite does **not** pin `ZABBIX_AGENT2__SERVER`,
-   so it prompts for the server interactively; an unattended run must pass `ZABBIX_AGENT2__SERVER=…`.
+6. **`proxmox/post-install.sh install`** — agent2 + chrony + unattended-upgrades installed; only
+   `zabbix-agent2` is enabled/restarted by the framework (chrony and unattended-upgrades manage their
+   own service via apt). Note: this composite does **not** pin `ZABBIX_AGENT2__SERVER`, so it prompts
+   for the server interactively; an unattended run must pass `ZABBIX_AGENT2__SERVER=…`.
 
-Verify `update` and `remove` modes on at least chrony and the composite (remove → grouped
-`systemctl stop` + `systemctl disable` + `apt purge`).
+Verify `update` and `remove` modes on at least chrony and the composite. On `remove`, only the
+packages this app id installed are purged (`systemctl stop`/`disable` for their declared services,
+then `apt purge`); pre-existing packages and packages owned by another app are left running.
 
 ## Known follow-ups / decisions pending
 

@@ -205,7 +205,7 @@ bash -c "$(wget -O - https://raw.githubusercontent.com/btc-jost/scripts/main/com
 
 | Path | What it does |
 | --- | --- |
-| `*/*.sh` | Composite installers — one per top-level folder (`3cx/`, `zabbix/`, `proxmox/`); see [Usage](#usage). |
+| `*/*.sh` | Composite installers, grouped in top-level folders (`3cx/`, `zabbix/`, `proxmox/`); see [Usage](#usage). |
 | `component/*.sh` | Reusable component installers (chrony, Zabbix agent 2, Zabbix proxy) built on the framework; see [Usage](#usage). |
 | `framework/*.func` | Sourced Bash libraries: an event-driven installer mini-framework. |
 
@@ -224,6 +224,7 @@ are listed with each script under [Usage](#usage).
 | `LOGFILE` | `/tmp/btc-helper-<timestamp>.log` | Where quiet command output is logged. |
 | `ZABBIX_VERSION` | per script (`7.0` / `7.4`) | Zabbix repo version used by `setup_zabbix_repo`. |
 | `FUNC_BASE_URL` | `…/btc-jost/scripts/main` | Base URL the scripts source `framework/*.func` from; point it at a branch to test it (see [Usage](#usage)). |
+| `_PKG_STATE_FILE` | `/var/lib/btc-helper/packages` | Where package ownership (`pkg=appid`) is recorded so `remove` purges only what this app installed. |
 
 ### Framework and component installers
 
@@ -231,9 +232,11 @@ are listed with each script under [Usage](#usage).
 sourced (not executed) by the leaf scripts:
 
 - `core.func` — colors/logging, shell/root checks, verbose mode, exit helper. Sourced by everything.
-- `engine.func` — the installer engine: the event-handler registry, `add_packages`/`add_services`
-  accumulators, batched apt/systemd default handlers, and the `installer_run` driver with
-  `install` / `update` / `remove` modes.
+- `engine.func` — the installer engine: the event-handler registry, `add_package <pkg> [svc...]`
+  (package + the service(s) the framework manages for it), `set_app_id`/`get_app_id`, batched
+  apt/systemd default handlers, and the `installer_run` driver with `install` / `update` / `remove`
+  modes. Install records which packages it actually installed (owned by the app id); `remove` purges
+  **only** those and disables only their services — pre-existing packages stay.
 - `prompt.func` — the declarative `whiptail` question wizard (omits any question whose variable is
   already set; `title=` sets a human-readable dialog title). When it shows any question it also adds a
   verbose toggle and a summary/confirm page, and numbers the steps by what's actually shown.
@@ -265,6 +268,6 @@ chrony` (presetting `CHRONY__SOURCE=swiss` to skip the prompt).
 
 ## TODO
 
-- **Track installed packages for safe removal** — on `install`, detect which requested packages are
-  already present and record the ones this run actually installed to a state file; on `remove`, purge
-  only those (leave pre-existing packages untouched).
+- **Save logs to `/var/log` instead of `/tmp`
+- **Chrony** implement custom NTP servers by variable
+- Permanent test and CI
