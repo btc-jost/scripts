@@ -1,0 +1,35 @@
+# shellcheck shell=bash
+#
+# btc Helper Scripts - Component Entry Point
+#
+# Copyright (C) 2025-2026  btc.jost AG
+# Copyright (C) 2025-2026  Simon Gilli
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+# Entry point sourced by the reusable component scripts in component/. It pulls in
+# everything a component needs: the core utilities, the installer engine (which also
+# provides include_component) and the question wizard. Composites use composite.func,
+# which sources the same set.
+
+[[ -n "${_COMPONENT_FUNC_LOADED:-}" ]] && return
+_COMPONENT_FUNC_LOADED=1
+
+FUNC_BASE_URL="${FUNC_BASE_URL:-https://raw.githubusercontent.com/btc-jost/scripts/main}"
+# shellcheck disable=SC1090
+[[ -n "${_CORE_FUNC_LOADED:-}" ]] || source <(wget -qO- "${FUNC_BASE_URL}/framework/core.func")
+# shellcheck disable=SC1090
+[[ -n "${_ENGINE_FUNC_LOADED:-}" ]] || source <(wget -qO- "${FUNC_BASE_URL}/framework/engine.func")
+# shellcheck disable=SC1090
+[[ -n "${_PROMPT_FUNC_LOADED:-}" ]] || source <(wget -qO- "${FUNC_BASE_URL}/framework/prompt.func")

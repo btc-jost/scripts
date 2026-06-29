@@ -1,0 +1,500 @@
+# shellcheck shell=bash
+#
+# btc Helper Scripts - Declarative Prompt Functions
+#
+# Copyright (C) 2025-2026  btc.jost AG
+# Copyright (C) 2025-2026  Simon Gilli
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+[[ -n "${_PROMPT_FUNC_LOADED:-}" ]] && return
+_PROMPT_FUNC_LOADED=1
+
+FUNC_BASE_URL="${FUNC_BASE_URL:-https://raw.githubusercontent.com/btc-jost/scripts/main}"
+# shellcheck disable=SC1090
+[[ -n "${_CORE_FUNC_LOADED:-}" ]] || source <(wget -qO- "${FUNC_BASE_URL}/framework/core.func")
+
+# ==============================================================================
+# Question registry
+# ==============================================================================
+#
+# A component declares the input it needs; the core runs the wizard and stores
+# each answer into a global variable named by the question KEY. The component
+# never writes whiptail calls - it reads $KEY later (e.g. in post_install).
+#
+# A question whose KEY variable is ALREADY set (non-empty) when the wizard runs
+# is omitted - the preset value is kept. This is how a composite suppresses a
+# component's question (set the var before include_component) and how a
+# `configure` handler can pre-answer steps.
+#
+# register_question <KEY> <type> <prompt> [opt]...
+#   type:
+#     input       text entry           -> $KEY (string)
+#     yesno       yes/no question       -> $KEY ("yes"|"no")
+#     menu        pick one of N tags    -> $KEY (chosen tag)
+#     input_list  repeat until empty    -> $KEY (bash array)
+#   opt (each a separate argument so values may contain spaces):
+#     default=<v>                 default value (or default tag for menu)
+#     validate=alnum|num|nonempty|regex:<re>
+#     when=<KEY>=<value>          only ask when a previous answer matches
+#     title=<text>                human-readable dialog title + summary label
+#                                 (falls back to the KEY for the dialog, and to
+#                                 the prompt text for the summary, when omitted)
+#     <tag>=<label>               a menu option (menu type only)
+#
+# The interactive wizard appends two built-in steps after a script's own
+# questions (when at least one real question is shown): a "Verbose mode" yes/no
+# toggle (sets VERBOSE; omitted if VERBOSE is preset) and a summary/confirm page
+# listing the chosen answers with Confirm/Back. Step numbers count only the steps
+# actually shown. Disable the summary with WIZARD_REVIEW=no and the verbose toggle
+# with WIZARD_VERBOSE_PROMPT=no.
+#
+# Example:
+#   register_question CUSTOMER input "Set customer name" validate=alnum title=Customer
+#   register_question SOURCE menu "Choose NTP source" default=swiss \
+#     "swiss=Swiss NTP pool" "custom=User defined"
+#   register_question CUSTOM input_list "Enter NTP server (empty to finish)" \
+#     when=SOURCE=custom
+# ------------------------------------------------------------------------------
+
+_Q_KEYS=()
+_Q_TYPES=()
+_Q_PROMPTS=()
+_Q_OPTS=() # remaining args, joined with the unit-separator (\037)
+_Q_PRESET=() # per-question "was preset before the wizard" snapshot (run_questions)
+
+register_question() {
+  local key="$1" type="$2" prompt="$3"
+  shift 3
+  _Q_KEYS+=("$key")
+  _Q_TYPES+=("$type")
+  _Q_PROMPTS+=("$prompt")
+  local IFS=$'\037'
+  _Q_OPTS+=("$*")
+}
+
+# ------------------------------------------------------------------------------
+# Internal: split a stored opts blob (index $1) into the _OPT_* / _OPT_MENU vars.
+# ------------------------------------------------------------------------------
+_q_parse_opts() {
+  local idx="$1" tok
+  _OPT_DEFAULT=""
+  _OPT_VALIDATE=""
+  _OPT_WHEN=""
+  _OPT_TITLE=""
+  _OPT_MENU=()
+  local IFS=$'\037'
+  for tok in ${_Q_OPTS[$idx]}; do
+    case "$tok" in
+      default=*) _OPT_DEFAULT="${tok#default=}" ;;
+      validate=*) _OPT_VALIDATE="${tok#validate=}" ;;
+      when=*) _OPT_WHEN="${tok#when=}" ;;
+      title=*) _OPT_TITLE="${tok#title=}" ;;
+      *=*) _OPT_MENU+=("$tok") ;;
+    esac
+  done
+}
+
+# Internal: is question $1's answer already provided (preset before the wizard)?
+# A preset question is omitted by the wizard and kept as-is. For input_list we check
+# the named array is non-empty (a composite/env can preset it; a `configure` handler
+# may normalise a delimited string into the array first).
+_q_already_set() {
+  local key="${_Q_KEYS[$1]}"
+  if [[ "${_Q_TYPES[$1]}" == "input_list" ]]; then
+    local -n _ref="$key"
+    [[ ${#_ref[@]} -gt 0 ]]
+    return
+  fi
+  [[ -n "${!key:-}" ]]
+}
+
+# Internal: is question $1 applicable given previously collected answers?
+_q_condition_met() {
+  _q_parse_opts "$1"
+  [[ -z "$_OPT_WHEN" ]] && return 0
+  local cond_key="${_OPT_WHEN%%=*}" cond_val="${_OPT_WHEN#*=}"
+  [[ "${!cond_key:-}" == "$cond_val" ]]
+}
+
+# Internal: validate $2 against rule $1. Empty rule always passes.
+_q_validate() {
+  local rule="$1" value="$2"
+  case "$rule" in
+    "") return 0 ;;
+    alnum) [[ "$value" =~ ^[[:alnum:]]+$ ]] ;;
+    num) [[ "$value" =~ ^[0-9]+$ ]] ;;
+    nonempty) [[ -n "$value" ]] ;;
+    regex:*) [[ "$value" =~ ${rule#regex:} ]] ;;
+    *) return 0 ;;
+  esac
+}
+
+# Internal: store a scalar answer into the global named by $1.
+_q_store() {
+  printf -v "$1" '%s' "$2"
+}
+
+# Internal: store an array answer into the global array named by $1.
+_q_store_list() {
+  local name="$1"
+  shift
+  declare -ga "$name"
+  local -n _ref="$name"
+  _ref=("$@")
+  unset -n _ref
+}
+
+# Internal: apply the declared default without prompting (unattended path).
+_q_apply_default() {
+  local idx="$1"
+  local key="${_Q_KEYS[$idx]}" type="${_Q_TYPES[$idx]}"
+  _q_parse_opts "$idx"
+  case "$type" in
+    input_list)
+      if [[ -n "$_OPT_DEFAULT" ]]; then
+        local IFS=','
+        read -ra _vals <<<"$_OPT_DEFAULT"
+        _q_store_list "$key" "${_vals[@]}"
+      else
+        _q_store_list "$key"
+      fi
+      ;;
+    *) _q_store "$key" "$_OPT_DEFAULT" ;;
+  esac
+}
+
+# Internal: clear an answer (used when a conditional question is skipped).
+_q_clear_answer() {
+  local idx="$1"
+  local key="${_Q_KEYS[$idx]}"
+  if [[ "${_Q_TYPES[$idx]}" == "input_list" ]]; then
+    _q_store_list "$key"
+  else
+    _q_store "$key" ""
+  fi
+}
+
+# ------------------------------------------------------------------------------
+# Internal: confirm aborting the wizard. Shown when ESC is pressed (whiptail exit
+# code 255, distinct from the Back/Cancel button's 1). Returns 0 only when the
+# user explicitly chooses to exit; ESC on this dialog resumes (safe default).
+# ------------------------------------------------------------------------------
+_q_abort_confirm() {
+  # shellcheck disable=SC2153  # TITLE is a global from core.func
+  whiptail --backtitle "${TITLE}" --title "Exit installer?" \
+    --yes-button "Exit" --no-button "Resume" --defaultno \
+    --yesno "\nAbort the installation and exit?" 8 60 3>&1 1>&2 2>&3
+}
+
+# ------------------------------------------------------------------------------
+# Internal: ask a single question with whiptail.
+# Returns: 0 = Next, 1 = Back, 2 = Exit (ESC -> abort confirmed).
+# $1 idx  $2 step  $3 total
+# ------------------------------------------------------------------------------
+_q_ask() {
+  local idx="$1" step="$2" total="$3"
+  local key="${_Q_KEYS[$idx]}"
+  local type="${_Q_TYPES[$idx]}" prompt="${_Q_PROMPTS[$idx]}"
+  # shellcheck disable=SC2153  # TITLE is a global from core.func, not a typo of $title
+  local backtitle="${TITLE} [Step ${step}/${total}]"
+  _q_parse_opts "$idx"
+  local title="${_OPT_TITLE:-$key}"
+  local back_button="Back"
+  [[ "$step" == "1" ]] && back_button="Exit"
+
+  local value rc
+  case "$type" in
+    input)
+      while true; do
+        value=$(whiptail --backtitle "$backtitle" --title "$title" \
+          --ok-button "Next" --cancel-button "$back_button" \
+          --inputbox "\n${prompt}" 10 60 "${!key:-$_OPT_DEFAULT}" \
+          3>&1 1>&2 2>&3)
+        rc=$?
+        if ((rc == 0)); then
+          if _q_validate "$_OPT_VALIDATE" "$value"; then
+            _q_store "$key" "$value"
+            return 0
+          fi
+          whiptail --backtitle "$backtitle" --title "Invalid value" \
+            --msgbox "The value does not satisfy: ${_OPT_VALIDATE}" 8 60
+        elif ((rc == 1)); then
+          return 1
+        else # ESC
+          _q_abort_confirm && return 2
+        fi
+      done
+      ;;
+    yesno)
+      # Default to the current answer (or declared default): No unless it's truthy.
+      local yn_flag=()
+      [[ "${!key:-$_OPT_DEFAULT}" =~ ^(yes|true|1)$ ]] || yn_flag=(--defaultno)
+      while true; do
+        whiptail --backtitle "$backtitle" --title "$title" \
+          --yes-button "Yes" --no-button "No" "${yn_flag[@]}" \
+          --yesno "\n${prompt}" 10 60 3>&1 1>&2 2>&3
+        rc=$?
+        if ((rc == 0)); then
+          _q_store "$key" "yes"
+          return 0
+        elif ((rc == 1)); then
+          _q_store "$key" "no"
+          return 0
+        else # ESC
+          _q_abort_confirm && return 2
+        fi
+      done
+      ;;
+    menu)
+      local menu_args=() pair tag label
+      for pair in "${_OPT_MENU[@]}"; do
+        tag="${pair%%=*}"
+        label="${pair#*=}"
+        menu_args+=("$tag" "$label")
+      done
+      while true; do
+        value=$(whiptail --backtitle "$backtitle" --title "$title" \
+          --ok-button "Next" --cancel-button "$back_button" \
+          --default-item "${!key:-$_OPT_DEFAULT}" \
+          --menu "\n${prompt}" 16 60 "${#_OPT_MENU[@]}" \
+          "${menu_args[@]}" 3>&1 1>&2 2>&3)
+        rc=$?
+        if ((rc == 0)); then
+          _q_store "$key" "$value"
+          return 0
+        elif ((rc == 1)); then
+          return 1
+        else # ESC
+          _q_abort_confirm && return 2
+        fi
+      done
+      ;;
+    input_list)
+      local entries=()
+      while true; do
+        value=$(whiptail --backtitle "$backtitle" --title "$title" \
+          --ok-button "Add" --cancel-button "Done" \
+          --inputbox "\n${prompt}" 10 60 \
+          3>&1 1>&2 2>&3)
+        rc=$?
+        if ((rc == 0)); then
+          [[ -z "$value" ]] && break # empty entry finishes the list
+          entries+=("$value")
+        elif ((rc == 1)); then
+          break # Done finishes the list
+        else # ESC
+          _q_abort_confirm && return 2
+        fi
+      done
+      _q_store_list "$key" "${entries[@]}"
+      return 0
+      ;;
+    *)
+      msg_error "Unknown question type '${type}' for '${key}'"
+      return 0
+      ;;
+  esac
+}
+
+# Internal: a question is "shown" in the wizard when it is not preset (see the
+# _Q_PRESET snapshot taken in run_questions) and its condition is currently met.
+# _Q_PRESET is a global set by run_questions and read here via dynamic scope.
+_q_is_shown() {
+  local idx="$1"
+  [[ "${_Q_PRESET[$idx]:-0}" == "1" ]] && return 1
+  _q_condition_met "$idx"
+}
+
+# Internal: compute step ordinal + total for the question at index $1 (or -1 to
+# just get the total). Sets _STEP (1-based position among shown questions; 0 if not
+# found) and _TOTAL (count of shown questions). Recomputed per render so a
+# conditional question that becomes applicable is reflected honestly.
+_q_compute_step() {
+  local target="$1" k count=0
+  _STEP=0
+  for ((k = 0; k < ${#_Q_KEYS[@]}; k++)); do
+    _q_is_shown "$k" || continue
+    count=$((count + 1))
+    [[ "$k" == "$target" ]] && _STEP=$count
+  done
+  _TOTAL=$count
+}
+
+# Internal: index of the last shown question (-1 if none). Used to land Back-from-
+# summary on the final question.
+_q_last_shown() {
+  local k last=-1
+  for ((k = 0; k < ${#_Q_KEYS[@]}; k++)); do
+    _q_is_shown "$k" && last=$k
+  done
+  printf '%s' "$last"
+}
+
+# Internal: render the confirmation summary of all shown answers (by title) and ask
+# Confirm / Back. Returns: 0 = Confirm, 1 = Back, 2 = Exit (ESC -> abort confirmed).
+_q_confirm_summary() {
+  local k key type title val text="" lines rc
+  for ((k = 0; k < ${#_Q_KEYS[@]}; k++)); do
+    _q_is_shown "$k" || continue
+    key="${_Q_KEYS[$k]}"
+    type="${_Q_TYPES[$k]}"
+    _q_parse_opts "$k"
+    title="${_OPT_TITLE:-${_Q_PROMPTS[$k]}}"
+    if [[ "$type" == "input_list" ]]; then
+      # shellcheck disable=SC2178  # nameref to a global array; only read here
+      local -n _ref="$key"
+      val="$(printf '%s, ' "${_ref[@]}")"
+      val="${val%, }"
+      unset -n _ref
+    else
+      val="${!key:-}"
+    fi
+    text+="  ${title}: ${val}"$'\n'
+  done
+
+  _q_compute_step -1
+  local total=$((_TOTAL + 1))
+  lines=$(($(printf '%s' "$text" | grep -c '' ) + 11))
+  whiptail --backtitle "${TITLE} [Step ${total}/${total}]" --title "Confirm settings" \
+    --yes-button "Confirm" --no-button "Back" \
+    --yesno "\n${text}\nProceed with these settings?" "$lines" 64 3>&1 1>&2 2>&3
+  rc=$?
+  ((rc == 0)) && return 0
+  ((rc == 1)) && return 1
+  _q_abort_confirm && return 2 # ESC
+  return 1                     # not aborting -> treat as Back
+}
+
+# ------------------------------------------------------------------------------
+# run_questions() - built-in configure step. Drives all declared questions as a
+# multi-step wizard (Next/Back/Exit) with conditional skipping, then a built-in
+# verbose toggle and a summary/confirm page. In unattended / non-TTY mode it fills
+# declared defaults without prompting (no toggle, no summary).
+# ------------------------------------------------------------------------------
+run_questions() {
+  local n=${#_Q_KEYS[@]}
+  ((n == 0)) && { set_std_mode; return 0; }
+
+  if is_unattended || ! command -v whiptail >/dev/null 2>&1; then
+    local i
+    for ((i = 0; i < n; i++)); do
+      if ! _q_condition_met "$i"; then
+        _q_clear_answer "$i"
+      elif ! _q_already_set "$i"; then
+        _q_apply_default "$i"
+      fi
+    done
+    set_std_mode
+    return 0
+  fi
+
+  # Count the real (script-declared) questions that will actually be shown.
+  local real_askable=0 j
+  for ((j = 0; j < n; j++)); do
+    _q_condition_met "$j" && ! _q_already_set "$j" && real_askable=$((real_askable + 1))
+  done
+
+  # Nothing to ask: clear inapplicable conditionals and return without dialogs
+  # (keeps prompt-free scripts, e.g. 3cx, silent).
+  if ((real_askable == 0)); then
+    for ((j = 0; j < n; j++)); do
+      _q_condition_met "$j" || _q_clear_answer "$j"
+    done
+    set_std_mode
+    return 0
+  fi
+
+  # Append the built-in verbose toggle (unless disabled or VERBOSE preset). It then
+  # flows through the loop as the last question, before the summary.
+  local has_verbose=0
+  for j in "${_Q_KEYS[@]}"; do [[ "$j" == "VERBOSE" ]] && has_verbose=1; done
+  if [[ "${WIZARD_VERBOSE_PROMPT:-yes}" =~ ^(yes|true|1)$ && -z "${VERBOSE:-}" && $has_verbose -eq 0 ]]; then
+    # A menu (not yesno) so the step keeps the standard Next/Back/Exit buttons -
+    # a whiptail yes/no box has no Back button.
+    register_question VERBOSE menu \
+      "Show detailed output during the installation?" \
+      default=no title="Verbose mode" \
+      "no=No - quiet output (recommended)" \
+      "yes=Yes - show all command output"
+    n=${#_Q_KEYS[@]}
+  fi
+
+  local review_enabled=0
+  [[ "${WIZARD_REVIEW:-yes}" =~ ^(yes|true|1)$ ]] && review_enabled=1
+
+  # Snapshot which questions are preset (set before the wizard). Only these are
+  # skipped; answers given during the wizard stay editable via Back.
+  _Q_PRESET=()
+  for ((j = 0; j < n; j++)); do
+    if _q_already_set "$j"; then _Q_PRESET[j]=1; else _Q_PRESET[j]=0; fi
+  done
+
+  # First shown question. Back on it acts as Exit.
+  local first_askable=-1
+  for ((j = 0; j < n; j++)); do
+    if _q_is_shown "$j"; then first_askable=$j; break; fi
+  done
+
+  tput smcup 2>/dev/null || true
+  local start=$first_askable exited=0
+  while true; do
+    local i=$start dir=1
+    while ((i >= 0 && i < n)); do
+      # Skip preset / inapplicable questions; clear answers that no longer apply.
+      if ! _q_condition_met "$i"; then
+        _q_clear_answer "$i"
+        i=$((i + dir))
+        ((i < 0)) && { exited=1; break; }
+        continue
+      fi
+      if [[ "${_Q_PRESET[$i]}" == "1" ]]; then
+        i=$((i + dir))
+        ((i < 0)) && { exited=1; break; }
+        continue
+      fi
+      local total step
+      _q_compute_step "$i"
+      step=$_STEP
+      total=$_TOTAL
+      ((review_enabled)) && total=$((total + 1))
+      local rc
+      _q_ask "$i" "$step" "$total"
+      rc=$?
+      if ((rc == 0)); then
+        dir=1
+        i=$((i + 1))
+      elif ((rc == 2)); then # ESC -> abort confirmed
+        exited=1
+        break
+      else # Back
+        ((i <= first_askable)) && { exited=1; break; }
+        dir=-1
+        i=$((i - 1))
+      fi
+    done
+    ((exited)) && break
+    ((review_enabled)) || break
+    local src
+    _q_confirm_summary
+    src=$?
+    ((src == 0)) && break             # Confirm
+    ((src == 2)) && { exited=1; break; } # ESC -> abort confirmed
+    start=$(_q_last_shown)            # Back from summary -> edit the last shown question
+  done
+  tput rmcup 2>/dev/null || true
+
+  ((exited)) && exit_script
+  set_std_mode
+}

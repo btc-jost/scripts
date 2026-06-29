@@ -1,0 +1,189 @@
+# shellcheck shell=bash
+# shellcheck disable=SC2034  # palette/contract vars are consumed by sibling .func files and sourcing scripts
+#
+# btc Helper Scripts - Core Functions
+#
+# Copyright (C) 2025-2026  btc.jost AG
+# Copyright (C) 2025-2026  Simon Gilli
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+# Load-once guard: this file may be sourced multiple times (e.g. engine.func and
+# a component script both pull it in). Sourcing it again is a no-op.
+[[ -n "${_CORE_FUNC_LOADED:-}" ]] && return
+_CORE_FUNC_LOADED=1
+
+TITLE="btc Helper Scripts"
+
+# ------------------------------------------------------------------------------
+# load_functions() - initialise the core utility groups exactly once.
+# Call this early in any script (installer_run does it for you).
+# ------------------------------------------------------------------------------
+load_functions() {
+  [[ -n "${_FUNCTIONS_LOADED:-}" ]] && return
+  _FUNCTIONS_LOADED=1
+  color
+  formatting
+  icons
+  set_std_mode
+}
+
+# ------------------------------------------------------------------------------
+# color() / formatting() / icons()
+# ANSI colors, text formatting and status icons used across all scripts.
+# Variable names match the community-scripts convention so output strings are
+# portable between the two ecosystems.
+# ------------------------------------------------------------------------------
+color() {
+  YW=$'\033[33m'  # yellow
+  YWB=$'\033[93m' # yellow bright
+  BL=$'\033[36m'  # blue
+  RD=$'\033[01;31m'
+  BGN=$'\033[4;92m'
+  GN=$'\033[1;92m'
+  DGN=$'\033[32m'
+  CL=$'\033[m' # clear
+}
+
+formatting() {
+  BFR="\r\033[K" # carriage return + clear to end of line
+  BOLD=$'\033[1m'
+  HOLD=" "
+  TAB="  "
+}
+
+icons() {
+  CM="${TAB}✔️${TAB}"
+  CROSS="${TAB}✖️${TAB}"
+  INFO="${TAB}💡${TAB}"
+  OS="${TAB}🖥️${TAB}"
+  HOURGLASS="${TAB}⏳${TAB}"
+  HOSTNAME="${TAB}🏠${TAB}"
+}
+
+# ------------------------------------------------------------------------------
+# set_std_mode() - decide whether commands run loudly or quietly.
+# Verbose (see is_verbose_mode) -> STD=""       (run command directly, show output)
+# otherwise                     -> STD="silent" (run via silent(): log + hide output)
+# ------------------------------------------------------------------------------
+set_std_mode() {
+  if is_verbose_mode; then
+    STD=""
+  else
+    STD="silent"
+  fi
+}
+
+# Active log file for silent(); components may override LOGFILE before running.
+LOGFILE="${LOGFILE:-/var/log/btc-scripts/$(date +%Y%m%d_%H%M%S).log}"
+
+# ------------------------------------------------------------------------------
+# silent() - run a command quietly, logging its output.
+# On success: nothing is shown. On failure: show the last lines of the log and
+# return the original exit code (so callers can use `$STD cmd || true`).
+# ------------------------------------------------------------------------------
+silent() {
+  local cmd="$*"
+  mkdir -p "$(dirname "$LOGFILE")" 2>/dev/null || true
+  "$@" >>"$LOGFILE" 2>&1
+  local rc=$?
+  if [[ $rc -ne 0 ]]; then
+    msg_warn "Command failed (rc=$rc): ${cmd}"
+    tail -n 10 "$LOGFILE" 2>/dev/null >&2 || true
+  fi
+  return $rc
+}
+
+# ------------------------------------------------------------------------------
+# Message helpers. info/ok print to stdout (info leaves the cursor on the same
+# line so a following ok/error overwrites it); warn/error print to stderr.
+# ------------------------------------------------------------------------------
+msg_info() {
+  local msg="$1"
+  [[ -z "$msg" ]] && return
+  printf "%b" "${BFR}${HOURGLASS}${YW}${msg}${CL}"
+}
+
+msg_ok() {
+  local msg="$1"
+  [[ -z "$msg" ]] && return
+  printf "%b\n" "${BFR}${CM}${GN}${msg}${CL}"
+}
+
+msg_error() {
+  local msg="$1"
+  printf "%b\n" "${BFR}${CROSS}${RD}${msg}${CL}" >&2
+}
+
+msg_warn() {
+  local msg="$1"
+  printf "%b\n" "${BFR}${INFO}${YWB}${msg}${CL}" >&2
+}
+
+# msg_note - an informational tip on stdout (persistent line). Unlike msg_warn it is
+# not a warning and goes to stdout; unlike msg_info it is not overwritten.
+msg_note() {
+  local msg="$1"
+  [[ -z "$msg" ]] && return
+  printf "%b\n" "${BFR}${INFO}${BL}${msg}${CL}"
+}
+
+# ------------------------------------------------------------------------------
+# is_verbose_mode() / is_unattended()
+# is_verbose_mode is consumed by set_std_mode to choose loud vs silent command
+# execution; is_unattended is used by the prompt registry to decide between
+# interactive prompts and silent default-driven runs. Both accept the same set of
+# truthy values for a single, consistent convention.
+# ------------------------------------------------------------------------------
+is_verbose_mode() {
+  [[ "${VERBOSE:-no}" =~ ^(yes|true|1)$ ]]
+}
+
+is_unattended() {
+  [[ "${UNATTENDED:-no}" =~ ^(yes|true|1)$ ]] && return 0
+  # Interactive if a controlling terminal exists. We check /dev/tty rather than
+  # stdin, because the canonical `wget -O - URL | bash` pattern leaves stdin as a
+  # pipe while whiptail still reads from the terminal.
+  [[ -e /dev/tty ]] && return 1
+  return 0 # no controlling terminal -> cannot prompt
+}
+
+# ------------------------------------------------------------------------------
+# Environment guards.
+# ------------------------------------------------------------------------------
+shell_check() {
+  if [[ "$(ps -p $$ -o comm=)" != "bash" ]]; then
+    clear
+    msg_error "Your default shell is not bash. Please switch to bash and re-run."
+    echo -e "\nExiting..."
+    sleep 2
+    exit 1
+  fi
+}
+
+root_check() {
+  if [[ "$(id -u)" -ne 0 || $(ps -o comm= -p $PPID) == "sudo" ]]; then
+    clear
+    msg_error "Please run this script as root."
+    echo -e "\nExiting..."
+    sleep 2
+    exit 1
+  fi
+}
+
+exit_script() {
+  clear
+  msg_error "User exited script"
+  exit 0
+}

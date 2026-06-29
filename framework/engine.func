@@ -1,0 +1,399 @@
+# shellcheck shell=bash
+#
+# btc Helper Scripts - Installer Engine
+#
+# Copyright (C) 2025-2026  btc.jost AG
+# Copyright (C) 2025-2026  Simon Gilli
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+[[ -n "${_ENGINE_FUNC_LOADED:-}" ]] && return
+_ENGINE_FUNC_LOADED=1
+
+# Base URL for sourcing sibling libs. Defaults to main; override with
+# FUNC_BASE_URL=.../<branch> to test an unmerged branch. The load-once guards
+# mean a harness can pre-source local copies and these wget calls become no-ops.
+FUNC_BASE_URL="${FUNC_BASE_URL:-https://raw.githubusercontent.com/btc-jost/scripts/main}"
+
+# shellcheck disable=SC1090
+[[ -n "${_CORE_FUNC_LOADED:-}" ]] || source <(wget -qO- "${FUNC_BASE_URL}/framework/core.func")
+
+# Ownership state: maps a package to the app id that installed it (lines "pkg=appid").
+# Overridable for tests. See set_app_id / _record_owner / the remove flow.
+_PKG_STATE_FILE="${_PKG_STATE_FILE:-/var/lib/btc-scripts/packages}"
+
+# ==============================================================================
+# Shared collections, app id and event registry
+# ==============================================================================
+#
+# A run accumulates ONE package collection and ONE service collection, however
+# many components take part. Components never assign these arrays directly - they
+# enhance them via add_package (and the rare add_services). The core then does the
+# heavy work once: a single apt install and a single grouped service enable/restart.
+#
+# _PKG_SERVICES maps a package to the service(s) the framework must manage for it,
+# so removal can disable exactly the services of the packages it actually purges.
+#
+# variables_init() runs at source time, before any component registers handlers
+# or adds packages, so the collections exist for the first add_* / register call.
+# ------------------------------------------------------------------------------
+variables_init() {
+  declare -ga APP_PACKAGES=()
+  declare -ga APP_SERVICES=()
+  declare -ga _LOOSE_SERVICES=() # services added without a package (add_services)
+  declare -gA _PKG_SERVICES=()   # package -> space-joined service(s)
+  declare -gA _INCLUDED_COMPONENTS=() # slugs already pulled in this run (dedup)
+  declare -gA _EVENT_HANDLERS=()
+  _EVENT_NAMES=(
+    "configure"
+    "pre_install" "install" "post_install"
+    "pre_update" "update" "post_update"
+    "pre_remove" "remove" "post_remove"
+  )
+}
+variables_init
+
+# ------------------------------------------------------------------------------
+# set_app_id <id> / get_app_id
+# Identify which component/composite "owns" the packages installed in this run.
+# set_app_id is FIRST-CALLER-WINS: a composite sets its id before include_component,
+# so the components it pulls in (which call set_app_id too) defer to the composite -
+# packages installed during a composite run are owned by the composite.
+# ------------------------------------------------------------------------------
+set_app_id() {
+  [[ -z "${_APP_ID:-}" ]] && _APP_ID="$1"
+  return 0
+}
+
+get_app_id() {
+  printf '%s' "${_APP_ID:-default}"
+}
+
+# ------------------------------------------------------------------------------
+# include_component <slug> - pull a reusable component into this run. Sources it in
+# "compose mode" (_COMPOSING set, scoped to this call) so the component's top-level
+# registrations run while its trailing installer_run is a no-op. Available to both
+# composites and components (a component may pull in another, e.g. zabbix-agent2 ->
+# zabbix-release). De-duplicated: each slug is sourced at most once per run. The
+# component's contract vars must be set BEFORE this call (it reads them at source
+# time). Set COMPONENT_LOCAL_DIR to source from a local checkout (used for testing).
+# ------------------------------------------------------------------------------
+include_component() {
+  local _COMPOSING=1 slug="$1"
+  [[ -n "${_INCLUDED_COMPONENTS[$slug]:-}" ]] && return 0
+  _INCLUDED_COMPONENTS["$slug"]=1
+  if [[ -n "${COMPONENT_LOCAL_DIR:-}" && -f "${COMPONENT_LOCAL_DIR}/${slug}.sh" ]]; then
+    # shellcheck disable=SC1090
+    source "${COMPONENT_LOCAL_DIR}/${slug}.sh"
+  else
+    # shellcheck disable=SC1090
+    source <(wget -qO- "${FUNC_BASE_URL}/component/${slug}.sh")
+  fi
+}
+
+# ------------------------------------------------------------------------------
+# add_package <pkg> [service...] - add a package to the batched install, optionally
+# with the systemd service(s) the framework must manage for it (enabled on install,
+# disabled when the package is removed). Omit the service when apt's own maintainer
+# scripts already handle it (e.g. chrony, unattended-upgrades) - only declare one
+# when we must restart it to apply config we wrote (e.g. the Zabbix agent/proxy).
+# ------------------------------------------------------------------------------
+add_package() {
+  local pkg="$1"
+  shift
+  APP_PACKAGES+=("$pkg")
+  if [[ $# -gt 0 ]]; then
+    APP_SERVICES+=("$@")
+    _PKG_SERVICES["$pkg"]="$*"
+  fi
+}
+
+# add_services <svc>... - register service(s) NOT tied to a package (rare). They are
+# enabled on install and disabled on remove whenever this app removes any package.
+add_services() {
+  APP_SERVICES+=("$@")
+  _LOOSE_SERVICES+=("$@")
+}
+
+# register_event_handler <event> <function>
+# Multiple handlers may register for the same event; they run in registration
+# order. Handler names are stored space-joined in a single associative entry.
+register_event_handler() {
+  local event="$1" fn="$2"
+  if [[ " ${_EVENT_NAMES[*]} " != *" ${event} "* ]]; then
+    msg_error "Invalid event name '${event}'"
+    return 1
+  fi
+  _EVENT_HANDLERS["$event"]+=" $fn"
+}
+
+# run_event <event> - run every handler registered for an event, in order.
+run_event() {
+  local event="$1" handler
+  for handler in ${_EVENT_HANDLERS["$event"]:-}; do
+    "$handler"
+  done
+}
+
+# ==============================================================================
+# Package ownership tracking
+# ==============================================================================
+
+# pkg_installed <pkg> - 0 if dpkg reports the package installed. Public so a component
+# that installs a package out-of-band (e.g. zabbix-release via dpkg) can test it.
+pkg_installed() {
+  dpkg-query -W -f='${Status}' "$1" 2>/dev/null | grep -q "ok installed"
+}
+
+# _pkg_owner <pkg> - print the app id that owns <pkg> (empty if unowned).
+_pkg_owner() {
+  [[ -f "$_PKG_STATE_FILE" ]] || return 0
+  local line
+  while IFS= read -r line; do
+    if [[ "${line%%=*}" == "$1" ]]; then
+      printf '%s' "${line#*=}"
+      return 0
+    fi
+  done <"$_PKG_STATE_FILE"
+}
+
+# _record_owner <pkg> <appid> - set/replace ownership of <pkg>.
+_record_owner() {
+  local pkg="$1" appid="$2" tmp line
+  mkdir -p "$(dirname "$_PKG_STATE_FILE")"
+  tmp="$(mktemp)"
+  if [[ -f "$_PKG_STATE_FILE" ]]; then
+    while IFS= read -r line; do
+      [[ "${line%%=*}" == "$pkg" ]] && continue
+      printf '%s\n' "$line"
+    done <"$_PKG_STATE_FILE" >"$tmp"
+  fi
+  printf '%s=%s\n' "$pkg" "$appid" >>"$tmp"
+  mv "$tmp" "$_PKG_STATE_FILE"
+}
+
+# own_package <pkg> - record this run's app id as the owner of <pkg>. Public so a
+# component that installs a package out-of-band (e.g. zabbix-release via dpkg, before
+# the engine's batched apt step) can mark it owned, so remove purges it.
+own_package() {
+  _record_owner "$1" "$(get_app_id)"
+}
+
+# will_remove <pkg> - 0 if this app id owns <pkg> AND it's installed, i.e. the current
+# remove run will purge it. Components gate their config cleanup (pre_remove) on this so
+# they only delete what they wrote when the package they own is actually being removed.
+will_remove() {
+  [[ "$(_pkg_owner "$1")" == "$(get_app_id)" ]] && pkg_installed "$1"
+}
+
+# _forget_owner <pkg>... - drop ownership entries; remove the file when empty.
+_forget_owner() {
+  [[ -f "$_PKG_STATE_FILE" ]] || return 0
+  local -A drop=()
+  local p line tmp
+  for p in "$@"; do drop["$p"]=1; done
+  tmp="$(mktemp)"
+  while IFS= read -r line; do
+    [[ -n "${drop[${line%%=*}]:-}" ]] && continue
+    printf '%s\n' "$line"
+  done <"$_PKG_STATE_FILE" >"$tmp"
+  if [[ -s "$tmp" ]]; then
+    mv "$tmp" "$_PKG_STATE_FILE"
+  else
+    rm -f "$tmp" "$_PKG_STATE_FILE"
+  fi
+}
+
+# ==============================================================================
+# Built-in default handlers (orchestrated by installer_run, not registered)
+# ==============================================================================
+
+# _apt_packages <action> - install or upgrade the whole APP_PACKAGES collection in
+# one batched apt run. <action> is "install" (apt-get install -y) or "upgrade"
+# (apt-get install --only-upgrade -y). Records ownership for packages this run
+# actually installs (not pre-existing ones). No-op when nothing was added.
+_apt_packages() {
+  local action="$1"
+  [[ ${#APP_PACKAGES[@]} -eq 0 ]] && return 0
+
+  local gerund past flags
+  case "$action" in
+    install) gerund="Installing" past="Installed" flags=(-y) ;;
+    upgrade) gerund="Upgrading" past="Upgraded" flags=(--only-upgrade -y) ;;
+    *) msg_error "Unknown apt action: ${action}"; return 1 ;;
+  esac
+
+  # Snapshot what is already installed, so we record ownership only for packages
+  # this run actually installs - pre-existing ones are never owned, never purged.
+  local p preinstalled=() kept=() appid
+  appid="$(get_app_id)"
+  for p in "${APP_PACKAGES[@]}"; do
+    pkg_installed "$p" && preinstalled+=("$p")
+  done
+
+  # Hint: on install, name pre-existing packages this app won't own (kept on remove).
+  if [[ "$action" == "install" ]]; then
+    for p in "${preinstalled[@]}"; do
+      [[ "$(_pkg_owner "$p")" != "$appid" ]] && kept+=("$p")
+    done
+    [[ ${#kept[@]} -gt 0 ]] &&
+      msg_note "Already installed, keeping (won't be removed with '${appid}'): ${kept[*]}"
+  fi
+
+  msg_info "Updating package lists"
+  $STD apt-get update || true
+  msg_ok "Updated package lists"
+
+  msg_info "${gerund} packages: ${APP_PACKAGES[*]}"
+  if _apt_install_with_retry "${flags[@]}"; then
+    msg_ok "${past} packages: ${APP_PACKAGES[*]}"
+  else
+    msg_error "Failed to ${action} packages: ${APP_PACKAGES[*]}"
+    return 1
+  fi
+
+  for p in "${APP_PACKAGES[@]}"; do
+    if [[ " ${preinstalled[*]} " != *" ${p} "* ]] && pkg_installed "$p"; then
+      _record_owner "$p" "$appid"
+    fi
+  done
+}
+
+# _enable_services - grouped enable + restart of all APP_SERVICES (install/update).
+_enable_services() {
+  [[ ${#APP_SERVICES[@]} -eq 0 ]] && return 0
+  msg_info "Enabling services: ${APP_SERVICES[*]}"
+  $STD systemctl enable "${APP_SERVICES[@]}" || true
+  $STD systemctl restart "${APP_SERVICES[@]}" || true
+  msg_ok "Enabled services: ${APP_SERVICES[*]}"
+}
+
+# _disable_services <svc>... - stop then disable the given services (mirror of
+# _enable_services' enable -> start). No-op with no args.
+_disable_services() {
+  [[ $# -eq 0 ]] && return 0
+  msg_info "Disabling services: $*"
+  $STD systemctl stop "$@" || true
+  $STD systemctl disable "$@" || true
+  msg_ok "Disabled services: $*"
+}
+
+# _purge_packages <pkg>... - purge the given packages + autoremove. No-op with no args.
+_purge_packages() {
+  [[ $# -eq 0 ]] && return 0
+  msg_info "Removing packages: $*"
+  $STD apt-get purge -y "$@" || true
+  $STD apt-get autoremove -y || true
+  msg_ok "Removed packages: $*"
+}
+
+# _remove_owned - the remove built-in. Purge only packages this app installed (still
+# present) and disable the services they provide; pre-existing packages and packages
+# owned by another app/composite (and their services) are left untouched.
+_remove_owned() {
+  [[ ${#APP_PACKAGES[@]} -eq 0 ]] && return 0
+  local appid p svc owned=() services=()
+  appid="$(get_app_id)"
+
+  for p in "${APP_PACKAGES[@]}"; do
+    will_remove "$p" && owned+=("$p")
+  done
+
+  if [[ ${#owned[@]} -eq 0 ]]; then
+    msg_warn "No packages installed by '${appid}' to remove; keeping everything"
+    return 0
+  fi
+
+  # Disable only the services of the packages we're actually purging (+ loose ones).
+  for p in "${owned[@]}"; do
+    for svc in ${_PKG_SERVICES["$p"]:-}; do services+=("$svc"); done
+  done
+  [[ ${#_LOOSE_SERVICES[@]} -gt 0 ]] && services+=("${_LOOSE_SERVICES[@]}")
+
+  _disable_services "${services[@]}"
+  _purge_packages "${owned[@]}"
+  _forget_owner "${owned[@]}"
+}
+
+# ------------------------------------------------------------------------------
+# apt-get install <flags> APP_PACKAGES, retried. Output routed through $STD
+# (silent + log). Caller supplies the verb flags (-y, or --only-upgrade -y).
+# ------------------------------------------------------------------------------
+_apt_install_with_retry() {
+  local flags=("$@")
+  local max_retries=2 retry=0
+  while [[ $retry -le $max_retries ]]; do
+    if $STD apt-get install "${flags[@]}" "${APP_PACKAGES[@]}"; then
+      return 0
+    fi
+    retry=$((retry + 1))
+    if [[ $retry -le $max_retries ]]; then
+      msg_warn "apt-get install failed, retrying ($retry/$max_retries)..."
+      sleep 2
+      $STD apt-get update || true
+    fi
+  done
+  return 1
+}
+
+# ==============================================================================
+# Orchestrator - the single entry point a (top-level) script calls.
+# ==============================================================================
+# Usage (after all components are registered): installer_run "$@"
+# The core sequences the built-in steps (questions, one batched install, grouped
+# service enable) around every component's registered event handlers.
+#
+# When sourced under composition (_COMPOSING set by include_component), this is a
+# no-op: the component's registrations already ran at source time, and the
+# composite's own installer_run drives the combined lifecycle.
+installer_run() {
+  [[ -n "${_COMPOSING:-}" ]] && return 0
+
+  MODE="${1:-install}" # install | update | remove
+
+  load_functions
+  shell_check
+  root_check
+
+  case "$MODE" in
+    install)
+      run_event configure # handlers may pre-answer questions before the wizard
+      run_questions # built-in: ask declared questions (omitting preset ones)
+      run_event pre_install
+      run_event install
+      _apt_packages install # built-in: one apt install of the whole collection
+      run_event post_install
+      _enable_services # built-in: one grouped enable/restart of all services
+      ;;
+    update)
+      run_event configure
+      run_questions
+      run_event pre_update
+      run_event update
+      _apt_packages upgrade
+      run_event post_update
+      _enable_services
+      ;;
+    remove)
+      run_event pre_remove
+      _remove_owned # built-in: purge only this app's packages, disable their services
+      run_event remove
+      run_event post_remove
+      ;;
+    *)
+      msg_error "Invalid mode: $MODE (expected install|update|remove)"
+      exit 1
+      ;;
+  esac
+}

@@ -1,8 +1,11 @@
 {
     "recommendations": [
         "timonwong.shellcheck",
+        "bmalehorn.shell-syntax",
+        "foxundermoon.shell-format",
         "github.vscode-pull-request-github",
         "davidanson.vscode-markdownlint",
-        "editorconfig.editorconfig"
+        "editorconfig.editorconfig",
+        "anthropic.claude-code"
     ]
 }

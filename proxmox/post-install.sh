@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# btc Helper Scripts - 3CX Post-Installation Script (composite)
+# btc Helper Scripts - Proxmox Post-Installation Script
 #
 # Copyright (C) 2025-2026  btc.jost AG
 # Copyright (C) 2025-2026  Simon Gilli
@@ -23,18 +23,19 @@ FUNC_BASE_URL="${FUNC_BASE_URL:-https://raw.githubusercontent.com/btc-jost/scrip
 [[ -n "${_COMPOSITE_FUNC_LOADED:-}" ]] || source <(wget -qO- "${FUNC_BASE_URL}/framework/composite.func")
 
 # --- Declaration -------------------------------------------------------------
-# Contract for the included components, set BEFORE include_component (the
-# components read these at source time; presetting them suppresses their
-# matching wizard questions).
 _ZABBIX_AGENT2__CONF="${_ZABBIX_AGENT2__CONF:-/etc/zabbix/zabbix_agent2.d/smartmonitoring.conf}"
-ZABBIX_VERSION="${ZABBIX_VERSION:-7.4}"
-ZABBIX_AGENT2__SERVER="${ZABBIX_AGENT2__SERVER:-192.168.72.5}"
+ZABBIX_VERSION="${ZABBIX_VERSION:-7.0}"
+ZABBIX_AGENT2__HOSTNAME="${ZABBIX_AGENT2__HOSTNAME:-$(hostname)}"
+# Swiss NTP comes from the chrony component; preset its source to skip the prompt.
 CHRONY__SOURCE="${CHRONY__SOURCE:-swiss}"
 
 # Own the packages installed in this run (first caller wins -> beats the components').
-set_app_id 3cx-post-install
+set_app_id proxmox-post-install
 
 include_component zabbix-agent2
 include_component chrony
+# No service: the unattended-upgrades package's own maintainer scripts enable its
+# service/timers, so the framework needs no service handling (same as chrony).
+add_package unattended-upgrades
 
 installer_run "$@"

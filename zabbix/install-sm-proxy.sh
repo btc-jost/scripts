@@ -1,191 +1,101 @@
-#!/bin/bash
-
-# Installation script for smartMonitoring proxy on Debian or Ubuntu
-
-# Initialize variables
-ZABBIX_VERSION="7.0"
-HOSTNAME=""
-
-# ------------------------------------------------------------------------------
-# exit_script()
+#!/usr/bin/env bash
 #
-# - Called when user cancels an action
-# - Clears screen and displays exit message
-# - Exits with default exit code
-# ------------------------------------------------------------------------------
-exit_script() {
-  #clear
-  #msg_error "User exited script"
-  echo "User exited script"
-  exit 0
+# btc Helper Scripts - SmartMonitoring Proxy Installation Script (composite)
+#
+# Copyright (C) 2025-2026  btc.jost AG
+# Copyright (C) 2025-2026  Simon Gilli
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+#
+# A SmartMonitoring proxy is just the Zabbix proxy + agent2 components composed
+# together, plus the customer/location naming, a PSK and Swiss NTP. This script
+# includes those two installers and layers the SmartMonitoring specifics on top;
+# the core runs everything as one combined lifecycle (one apt install, etc.).
+
+FUNC_BASE_URL="${FUNC_BASE_URL:-https://raw.githubusercontent.com/btc-jost/scripts/main}"
+# shellcheck disable=SC1090
+[[ -n "${_COMPOSITE_FUNC_LOADED:-}" ]] || source <(wget -qO- "${FUNC_BASE_URL}/framework/composite.func")
+
+# --- SmartMonitoring contract -----------------------------------------------
+# Set BEFORE the includes: the components read these at source time. Pinning the
+# servers / CHRONY__SOURCE here also suppresses the components' matching questions
+# (only customer + location are left to ask).
+ZABBIX_VERSION="${ZABBIX_VERSION:-7.0}"
+ZABBIX_AGENT2__SERVER="${ZABBIX_AGENT2__SERVER:-localhost}"
+ZABBIX_PROXY__SERVER="${ZABBIX_PROXY__SERVER:-monitoring.smartcollab.ch}"
+# Hostnames are derived from customer+location in smproxy_pre_install; preset them
+# (non-empty) so the agent/proxy components don't prompt for them.
+ZABBIX_AGENT2__HOSTNAME="${ZABBIX_AGENT2__HOSTNAME:-$(hostname)}"
+ZABBIX_PROXY__HOSTNAME="${ZABBIX_PROXY__HOSTNAME:-$(hostname)}"
+_ZABBIX_PROXY__PSK_FILE="${_ZABBIX_PROXY__PSK_FILE:-/etc/zabbix/psk.key}"
+_ZABBIX_PROXY__DB_PATH="${_ZABBIX_PROXY__DB_PATH:-/var/lib/sqlite/zabbix-proxy.db}"
+_ZABBIX_AGENT2__CONF="${_ZABBIX_AGENT2__CONF:-/etc/zabbix/zabbix_agent2.d/smartmonitoring.conf}"
+_ZABBIX_PROXY__CONF="${_ZABBIX_PROXY__CONF:-/etc/zabbix/zabbix_proxy.d/smartmonitoring.conf}"
+CHRONY__SOURCE="${CHRONY__SOURCE:-swiss}"
+
+# Own the packages installed in this run (first caller wins -> beats the components').
+set_app_id zabbix-install-sm-proxy
+
+include_component zabbix-agent2
+include_component zabbix-proxy
+include_component chrony
+register_question SM_PROXY__CUSTOMER input "Set customer name" validate=alnum title=Customer
+register_question SM_PROXY__LOCATION input "Set location" validate=alnum title=Location
+register_event_handler pre_install smproxy_pre_install
+register_event_handler post_install smproxy_post_install
+register_event_handler pre_remove smproxy_pre_remove
+
+# generate_psk [keyfile] - create a 256-byte hex PSK if one does not exist.
+# Inlined here (single-use): only this composite generates a PSK. Idempotent.
+generate_psk() {
+  local keyfile="${1:-/etc/zabbix/psk.key}"
+  if [[ -f "$keyfile" ]]; then
+    msg_warn "PSK key already exists at ${keyfile}; keeping it"
+    return 0
+  fi
+  msg_info "Generating PSK key"
+  mkdir -p "$(dirname "$keyfile")"
+  openssl rand -hex 256 >"$keyfile"
+  msg_ok "Generated PSK key"
 }
 
-# ------------------------------------------------------------------------------
-# settings()
-#
-# - Interactive wizard-style configuration with BACK navigation
-# - State-machine approach: each step can go forward or backward
-# - Cancel at Step 1 = Exit Script, Cancel at other steps = Go Back
-# - Allows user to customize all proxy settings
-# ------------------------------------------------------------------------------
-settings() {
-  # Enter alternate screen buffer to prevent flicker between dialogs
-  tput smcup 2>/dev/null || true
-  trap 'tput rmcup 2>/dev/null || true' RETURN
-
-  # Initialize defaults
-  local STEP=1
-  local MAX_STEP=3
-
-  # Store values for back navigation
-  local _customer=""
-  local _location=""
-
-  # Main wizard loop
-  while [ $STEP -le $MAX_STEP ]; do
-    case $STEP in
-
-    # ═══════════════════════════════════════════════════════════════════════════
-    # STEP 1: Customer name
-    # ═══════════════════════════════════════════════════════════════════════════
-    1)
-      if result=$(whiptail --backtitle "btc Helper Scripts [Step $STEP/$MAX_STEP]" \
-        --title "CUSTOMER NAME" \
-        --ok-button "Next" --cancel-button "Exit" \
-        --inputbox "\nSet Customer Name" 10 58 "$_customer" \
-        3>&1 1>&2 2>&3); then
-
-        # allow only alphanumeric characters (no spaces or special chars) for hostname compatibility
-        if ! [[ $result =~ ^[[:alnum:]]+$ ]]; then
-          whiptail --backtitle "btc Helper Scripts" --title "Invalid Customer Name" --msgbox "Customer name can only contain letters and numbers (no spaces or special characters)." 8 58
-          continue
-        fi
-
-        _customer="$result"
-
-        ((STEP++))
-      else
-        exit_script
-      fi
-      ;;
-
-    # ═══════════════════════════════════════════════════════════════════════════
-    # STEP 2: Location
-    # ═════════════════════════════════════════════════════════════════════════
-    2)
-      if result=$(whiptail --backtitle "btc Helper Scripts [Step $STEP/$MAX_STEP]" \
-        --title "LOCATION" \
-        --ok-button "Next" --cancel-button "Back" \
-        --inputbox "\nSet Location" 10 58 "$_location" \
-        3>&1 1>&2 2>&3); then
-
-        # allow only alphanumeric characters (no spaces or special chars) for hostname compatibility
-        if ! [[ $result =~ ^[[:alnum:]]+$ ]]; then
-          whiptail --backtitle "btc Helper Scripts" --title "Invalid Location" --msgbox "Location can only contain letters and numbers (no spaces or special characters)." 8 58
-          continue
-        fi
-
-        _location="$result"
-
-        ((STEP++))
-      else
-        ((STEP--))
-      fi
-      ;;
-
-    # ═══════════════════════════════════════════════════════════════════════════
-    # STEP 3: Verbose Mode & Confirmation
-    # ═══════════════════════════════════════════════════════════════════════════
-    3)
-      local verbose_default_flag="--defaultno"
-      [[ "$_verbose" == "yes" ]] && verbose_default_flag=""
-
-      if whiptail --backtitle "btc Helper Scripts [Step $STEP/$MAX_STEP]" \
-        --title "VERBOSE MODE" \
-        $verbose_default_flag \
-        --yesno "\nEnable Verbose Mode?\n\nShows detailed output during installation." 12 58; then
-        _verbose="yes"
-      else
-        _verbose="no"
-      fi
-
-      # Build summary
-      local summary="Customer: $_customer
-Location: $_location
-
-Advanced:
-  Verbose: $_verbose"
-
-      if whiptail --backtitle "btc Helper Scripts [Step $STEP/$MAX_STEP]" \
-        --title "CONFIRM SETTINGS" \
-        --ok-button "Create LXC" --cancel-button "Back" \
-        --yesno "$summary\n\nCreate SmartMonitoring Proxy with these settings?" 32 62; then
-        ((STEP++))
-      else
-        ((STEP--))
-      fi
-      ;;
-    esac
-  done
-
-  # ═══════════════════════════════════════════════════════════════════════════
-  # Apply all collected values to global variables
-  # ═══════════════════════════════════════════════════════════════════════════
-  HOSTNAME="${_customer,,}-proxy-${_location,,}"
-
-  # Exit alternate screen buffer before showing summary (so output remains visible)
-  tput rmcup 2>/dev/null || true
-  trap - RETURN
-
-  # Display final summary
-  echo -e "\n${INFO}${BOLD}${DGN}Zabbix Proxy Version ${ZABBIX_VERSION}${CL}"
-  echo -e "${OS}${BOLD}${DGN}Operating System: ${BGN}$PRETTY_NAME${CL}"
+# Derive the proxy hostname and key BEFORE the components write their configs.
+smproxy_pre_install() {
+  local hn="${SM_PROXY__CUSTOMER,,}-proxy-${SM_PROXY__LOCATION,,}"
+  # shellcheck disable=SC2034  # read by component/zabbix-agent2.sh when it writes the agent conf
+  ZABBIX_AGENT2__HOSTNAME="$hn"
+  ZABBIX_PROXY__HOSTNAME="$hn"
+  generate_psk "$_ZABBIX_PROXY__PSK_FILE"
 }
 
-# Load OS information for use in repository URL construction
-# shellcheck disable=SC1091
-. /etc/os-release
+# Remove the PSK we generated - only if this run actually purges the proxy package.
+# (The included components clean up their own confs via their pre_remove handlers.)
+smproxy_pre_remove() {
+  will_remove zabbix-proxy-sqlite3 || return 0
+  msg_info "Removing PSK key"
+  rm -f "$_ZABBIX_PROXY__PSK_FILE"
+  msg_ok "Removed PSK key"
+}
 
-# Configure proxy
-settings
+smproxy_post_install() {
+  echo
+  msg_ok "SmartMonitoring Proxy installation completed"
+  echo "Proxy hostname: ${ZABBIX_PROXY__HOSTNAME}"
+  echo "PSK key:"
+  cat "$_ZABBIX_PROXY__PSK_FILE"
+  echo
+  echo "Add the PSK key to the Zabbix server so the proxy can connect."
+}
 
-# Install Zabbix repository
-wget "https://repo.zabbix.com/zabbix/${ZABBIX_VERSION}/${ID}/pool/main/z/zabbix-release/zabbix-release_latest+${ID}${VERSION_ID}_all.deb"
-dpkg -i "zabbix-release_latest+${ID}${VERSION_ID}_all.deb"
-apt update
-
-# Clean up
-rm "zabbix-release_latest+${ID}${VERSION_ID}_all.deb"
-
-# Install Zabbix proxy, agent 2, and chrony
-apt install zabbix-proxy-sqlite3 zabbix-agent2 chrony openssl -y
-
-# Configure Zabbix agent 2
-echo -e "Hostname=${HOSTNAME}" > /etc/zabbix/zabbix_agent2.d/smartmonitoring.conf
-
-if [ -f /etc/zabbix/psk.key ]; then
-    echo "PSK key already exists. Skipping generation."
-else
-    openssl rand -hex 256 > /etc/zabbix/psk.key
-fi
-
-echo -e "Server=monitoring.smartcollab.ch\nHostname=${HOSTNAME}\nDBName=/var/lib/sqlite/zabbix-proxy.db\nTLSConnect=psk\nTLSAccept=psk\nTLSPSKIdentity=${HOSTNAME}\nTLSPSKFile=/etc/zabbix/psk.key" >> /etc/zabbix/zabbix_proxy.d/smartmonitoring.conf
-
-mkdir -p /var/lib/sqlite
-chown zabbix:zabbix /var/lib/sqlite
-
-# Enable and start Zabbix agent 2 service
-systemctl enable zabbix-proxy zabbix-agent2
-systemctl restart zabbix-proxy zabbix-agent2
-
-# Configure chrony to use Swiss NTP servers
-echo -e 'pool 0.ch.pool.ntp.org iburst\npool 1.ch.pool.ntp.org iburst\npool 2.ch.pool.ntp.org iburst\npool 3.ch.pool.ntp.org iburst' > /etc/chrony/sources.d/pool-ntp-org.sources
-
-# Reload sources to apply changes
-chronyc reload sources
-
-# Final message
-echo -e "\nPost-installation script completed."
-echo -e "\nProxy hostname:\n${HOSTNAME}"
-echo -e "\nPSK key:\n$(cat /etc/zabbix/psk.key)"
-echo -e "\nPlease add the PSK key to the configuration and ensure the proxy is communicating with the Zabbix server."
+installer_run "$@"
