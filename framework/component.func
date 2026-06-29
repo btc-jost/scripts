@@ -18,10 +18,10 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-# Entry point sourced by the reusable component scripts in component/. It pulls
-# in everything a component needs: the core utilities, the installer engine, the
-# question wizard and the shared component tools. Composites use composite.func
-# instead (which additionally provides include_component).
+# Entry point sourced by the reusable component scripts in component/. It pulls in
+# everything a component needs: the core utilities, the installer engine (which also
+# provides include_component) and the question wizard. Composites use composite.func,
+# which sources the same set.
 
 [[ -n "${_COMPONENT_FUNC_LOADED:-}" ]] && return
 _COMPONENT_FUNC_LOADED=1
@@ -33,5 +33,3 @@ FUNC_BASE_URL="${FUNC_BASE_URL:-https://raw.githubusercontent.com/btc-jost/scrip
 [[ -n "${_ENGINE_FUNC_LOADED:-}" ]] || source <(wget -qO- "${FUNC_BASE_URL}/framework/engine.func")
 # shellcheck disable=SC1090
 [[ -n "${_PROMPT_FUNC_LOADED:-}" ]] || source <(wget -qO- "${FUNC_BASE_URL}/framework/prompt.func")
-# shellcheck disable=SC1090
-[[ -n "${_COMPONENT_TOOLS_FUNC_LOADED:-}" ]] || source <(wget -qO- "${FUNC_BASE_URL}/framework/component-tools.func")

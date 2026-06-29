@@ -53,6 +53,7 @@ variables_init() {
   declare -ga APP_SERVICES=()
   declare -ga _LOOSE_SERVICES=() # services added without a package (add_services)
   declare -gA _PKG_SERVICES=()   # package -> space-joined service(s)
+  declare -gA _INCLUDED_COMPONENTS=() # slugs already pulled in this run (dedup)
   declare -gA _EVENT_HANDLERS=()
   _EVENT_NAMES=(
     "configure"
@@ -77,6 +78,28 @@ set_app_id() {
 
 get_app_id() {
   printf '%s' "${_APP_ID:-default}"
+}
+
+# ------------------------------------------------------------------------------
+# include_component <slug> - pull a reusable component into this run. Sources it in
+# "compose mode" (_COMPOSING set, scoped to this call) so the component's top-level
+# registrations run while its trailing installer_run is a no-op. Available to both
+# composites and components (a component may pull in another, e.g. zabbix-agent2 ->
+# zabbix-release). De-duplicated: each slug is sourced at most once per run. The
+# component's contract vars must be set BEFORE this call (it reads them at source
+# time). Set COMPONENT_LOCAL_DIR to source from a local checkout (used for testing).
+# ------------------------------------------------------------------------------
+include_component() {
+  local _COMPOSING=1 slug="$1"
+  [[ -n "${_INCLUDED_COMPONENTS[$slug]:-}" ]] && return 0
+  _INCLUDED_COMPONENTS["$slug"]=1
+  if [[ -n "${COMPONENT_LOCAL_DIR:-}" && -f "${COMPONENT_LOCAL_DIR}/${slug}.sh" ]]; then
+    # shellcheck disable=SC1090
+    source "${COMPONENT_LOCAL_DIR}/${slug}.sh"
+  else
+    # shellcheck disable=SC1090
+    source <(wget -qO- "${FUNC_BASE_URL}/component/${slug}.sh")
+  fi
 }
 
 # ------------------------------------------------------------------------------
@@ -127,8 +150,9 @@ run_event() {
 # Package ownership tracking
 # ==============================================================================
 
-# _pkg_installed <pkg> - 0 if dpkg reports the package installed.
-_pkg_installed() {
+# pkg_installed <pkg> - 0 if dpkg reports the package installed. Public so a component
+# that installs a package out-of-band (e.g. zabbix-release via dpkg) can test it.
+pkg_installed() {
   dpkg-query -W -f='${Status}' "$1" 2>/dev/null | grep -q "ok installed"
 }
 
@@ -159,11 +183,18 @@ _record_owner() {
   mv "$tmp" "$_PKG_STATE_FILE"
 }
 
+# own_package <pkg> - record this run's app id as the owner of <pkg>. Public so a
+# component that installs a package out-of-band (e.g. zabbix-release via dpkg, before
+# the engine's batched apt step) can mark it owned, so remove purges it.
+own_package() {
+  _record_owner "$1" "$(get_app_id)"
+}
+
 # will_remove <pkg> - 0 if this app id owns <pkg> AND it's installed, i.e. the current
 # remove run will purge it. Components gate their config cleanup (pre_remove) on this so
 # they only delete what they wrote when the package they own is actually being removed.
 will_remove() {
-  [[ "$(_pkg_owner "$1")" == "$(get_app_id)" ]] && _pkg_installed "$1"
+  [[ "$(_pkg_owner "$1")" == "$(get_app_id)" ]] && pkg_installed "$1"
 }
 
 # _forget_owner <pkg>... - drop ownership entries; remove the file when empty.
@@ -208,7 +239,7 @@ _apt_packages() {
   local p preinstalled=() kept=() appid
   appid="$(get_app_id)"
   for p in "${APP_PACKAGES[@]}"; do
-    _pkg_installed "$p" && preinstalled+=("$p")
+    pkg_installed "$p" && preinstalled+=("$p")
   done
 
   # Hint: on install, name pre-existing packages this app won't own (kept on remove).
@@ -233,7 +264,7 @@ _apt_packages() {
   fi
 
   for p in "${APP_PACKAGES[@]}"; do
-    if [[ " ${preinstalled[*]} " != *" ${p} "* ]] && _pkg_installed "$p"; then
+    if [[ " ${preinstalled[*]} " != *" ${p} "* ]] && pkg_installed "$p"; then
       _record_owner "$p" "$appid"
     fi
   done

@@ -20,8 +20,8 @@
 
 # Entry point sourced by the top-level composite scripts (3cx/, proxmox/,
 # zabbix/). It pulls in the core utilities, the installer engine and the question
-# wizard, and adds include_component so a composite can pull reusable units from
-# component/ into one combined run.
+# wizard. `include_component` (for pulling reusable units from component/ into one
+# combined run) lives in engine.func, so both composites and components can use it.
 
 [[ -n "${_COMPOSITE_FUNC_LOADED:-}" ]] && return
 _COMPOSITE_FUNC_LOADED=1
@@ -33,22 +33,3 @@ FUNC_BASE_URL="${FUNC_BASE_URL:-https://raw.githubusercontent.com/btc-jost/scrip
 [[ -n "${_ENGINE_FUNC_LOADED:-}" ]] || source <(wget -qO- "${FUNC_BASE_URL}/framework/engine.func")
 # shellcheck disable=SC1090
 [[ -n "${_PROMPT_FUNC_LOADED:-}" ]] || source <(wget -qO- "${FUNC_BASE_URL}/framework/prompt.func")
-
-# ------------------------------------------------------------------------------
-# include_component <slug> - pull a reusable component in as part of this run.
-# Sources it in "compose mode" (_COMPOSING set, scoped to this call) so the
-# component's top-level registrations run while its trailing installer_run is a
-# no-op. The component's contract vars must be set BEFORE this call, since the
-# component reads them at source time.
-# Set COMPONENT_LOCAL_DIR to source from a local checkout (used for testing).
-# ------------------------------------------------------------------------------
-include_component() {
-  local _COMPOSING=1 slug="$1"
-  if [[ -n "${COMPONENT_LOCAL_DIR:-}" && -f "${COMPONENT_LOCAL_DIR}/${slug}.sh" ]]; then
-    # shellcheck disable=SC1090
-    source "${COMPONENT_LOCAL_DIR}/${slug}.sh"
-  else
-    # shellcheck disable=SC1090
-    source <(wget -qO- "${FUNC_BASE_URL}/component/${slug}.sh")
-  fi
-}

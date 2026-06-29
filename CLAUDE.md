@@ -48,13 +48,15 @@ Libs are sourced from `${FUNC_BASE_URL:-…/main}/framework/*.func` and carry lo
   `shell_check`, `root_check`, `is_unattended`, `exit_script`. Sourced by everything.
 - `framework/engine.func` — the installer engine: event registry (`register_event_handler`,
   `run_event`), `add_package <pkg> [svc...]` (+ legacy `add_services` for loose services),
-  `set_app_id`/`get_app_id` (first-caller-wins app id), batched default handlers (one apt
+  `set_app_id`/`get_app_id` (first-caller-wins app id), `include_component <slug>` (pull a unit into
+  the run, de-duplicated — usable by composites **and** components), batched default handlers (one apt
   install/upgrade), and per-package **ownership tracking** (`_PKG_STATE_FILE`, lines `pkg=appid`): a
   package is recorded as owned only when this run actually installs it, so `remove` purges **only**
   the app's own packages and disables **only** the services those packages declare (via the
-  `_PKG_SERVICES` map) — pre-existing packages and their services are left alone. `will_remove <pkg>`
-  exposes that "this run will purge it" test so a component's `pre_remove` handler can clean up the
-  config it wrote. `installer_run`
+  `_PKG_SERVICES` map) — pre-existing packages and their services are left alone. Public helpers
+  `pkg_installed`/`own_package` let a component track a package it installs out-of-band (e.g.
+  `zabbix-release` via `dpkg -i`); `will_remove <pkg>` exposes the "this run will purge it" test so a
+  component's `pre_remove` handler can clean up the config it wrote. `installer_run`
   orchestrates install/update/remove. Order per mode: `configure` event → `run_questions` (so a
   configure handler can pre-answer/suppress questions) → `pre_*`/`*`/`post_*`. Sources core.
 - `framework/prompt.func` — declarative question registry: `register_question <KEY> <type> <prompt>
@@ -67,24 +69,26 @@ Libs are sourced from `${FUNC_BASE_URL:-…/main}/framework/*.func` and carry lo
   **verbose toggle** (`VERBOSE` yes/no, omitted if `VERBOSE` is preset; the choice re-runs
   `set_std_mode`) and a **summary/confirm** page (Confirm/Back). Step numbers count only the steps
   actually shown (presets don't inflate them). Disable via `WIZARD_VERBOSE_PROMPT=no` / `WIZARD_REVIEW=no`.
-- `framework/component-tools.func` — helpers shared by ≥2 components: `setup_zabbix_repo`
-  (version-aware repo URL, idempotent) and its `_version_ge`. Single-use helpers stay inline in
-  their script (e.g. `generate_psk` lives in `install-sm-proxy.sh`); there is no composite-tools lib.
-- `framework/component.func` — **component entry point**: sources core + engine + prompt +
-  component-tools.
-- `framework/composite.func` — **composite entry point**: sources core + engine + prompt, and
-  provides `include_component` (resolves `component/<slug>.sh`, locally via `COMPONENT_LOCAL_DIR`).
+- `framework/component.func` / `framework/composite.func` — the two **entry points**; both source
+  core + engine + prompt. (Single-use helpers stay inline in their script, e.g. `generate_psk` in
+  `install-sm-proxy.sh`; there is no shared tools lib — `setup_zabbix_repo` became the `zabbix-release`
+  component.)
 
 `component/` — reusable component units (flat; runnable directly via `component.func`, or
-`include_component`-ed by a composite):
+`include_component`-ed by a composite or another component):
 - `component/chrony.sh` — a `menu` + `input_list` NTP-source question and a single config-write
-  handler. The reference worked example.
-- `component/zabbix-agent2.sh` — agent2 package/service, repo setup in `pre_install`, conf write in
-  `post_install`. Asks `ZABBIX_AGENT2__SERVER` and `ZABBIX_AGENT2__HOSTNAME` (default `$(hostname)`);
-  both auto-omitted when a composite presets them.
-- `component/zabbix-proxy.sh` — **proxy package only**, asks `ZABBIX_PROXY__SERVER` and
-  `ZABBIX_PROXY__HOSTNAME` (default `$(hostname)`); writes the proxy conf, taking `_ZABBIX_PROXY__DB_PATH`
-  and optional `_ZABBIX_PROXY__PSK_FILE` from internal contract vars.
+  handler. The reference worked example. Custom servers can also be preset via `CHRONY__CUSTOM`.
+- `component/zabbix-release.sh` — adds the Zabbix apt repo: `pre_install` `dpkg -i`s the
+  version-aware `zabbix-release` deb (kept untouched if already present) and `own_package`s it;
+  `add_package zabbix-release` makes the engine install/own/remove it. `include_component`-ed by the
+  zabbix components (so standalone + composite runs both get the repo, deduped to once).
+- `component/zabbix-agent2.sh` — agent2 package/service, `include_component zabbix-release`, conf write
+  in `post_install`, conf cleanup in `pre_remove`. Asks `ZABBIX_AGENT2__SERVER` and
+  `ZABBIX_AGENT2__HOSTNAME` (default `$(hostname)`); both auto-omitted when a composite presets them.
+- `component/zabbix-proxy.sh` — **proxy package only**, `include_component zabbix-release`, asks
+  `ZABBIX_PROXY__SERVER` and `ZABBIX_PROXY__HOSTNAME` (default `$(hostname)`); writes the proxy conf,
+  taking `_ZABBIX_PROXY__DB_PATH` and optional `_ZABBIX_PROXY__PSK_FILE` from internal contract vars;
+  removes conf + DB in `pre_remove`.
 
 ## How to run
 
@@ -118,7 +122,7 @@ bash -c "$(wget -O - https://raw.githubusercontent.com/btc-jost/scripts/main/zab
   `ZABBIX_PROXY`, `SM_PROXY`) joined to the name by a **double underscore**. A **leading `_`** marks an
   internal/script-only var (`_ZABBIX_PROXY__CONF`); without the leading `_` it is a wizard input used
   in a `register_question` call (`ZABBIX_AGENT2__SERVER`). Exception: `ZABBIX_VERSION` is a single
-  shared var read by `setup_zabbix_repo`.
+  shared var read by the `zabbix-release` component.
 - **Don't access framework globals directly** from components/composites — use the funcs
   (`add_package`, `add_services`, `register_question`, `register_event_handler`,
   `set_app_id`/`get_app_id`). The engine owns `APP_PACKAGES`/`APP_SERVICES`/`_APP_ID`/`_PKG_SERVICES`.

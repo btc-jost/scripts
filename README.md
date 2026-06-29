@@ -122,7 +122,8 @@ bash -c "$(wget -O - https://raw.githubusercontent.com/btc-jost/scripts/main/pro
 ### Components
 
 Reusable single-purpose units — run them standalone with the commands below, or pull them into a
-composite with `include_component`.
+composite with `include_component`. (`component/zabbix-release.sh` adds the Zabbix apt repo and is
+pulled in automatically by the zabbix components, so it's not listed separately.)
 
 #### `component/chrony.sh`
 
@@ -224,7 +225,7 @@ are listed with each script under [Usage](#usage).
 | `WIZARD_VERBOSE_PROMPT` | `yes` | Set `no` to drop the built-in "Verbose mode" wizard step. |
 | `WIZARD_REVIEW` | `yes` | Set `no` to drop the summary/confirm wizard page. |
 | `LOGFILE` | `/var/log/btc-scripts/<timestamp>.log` | Where quiet command output is logged. |
-| `ZABBIX_VERSION` | per script (`7.0` / `7.4`) | Zabbix repo version used by `setup_zabbix_repo`. |
+| `ZABBIX_VERSION` | per script (`7.0` / `7.4`) | Zabbix repo version used by the `zabbix-release` component. |
 | `FUNC_BASE_URL` | `…/btc-jost/scripts/main` | Base URL the scripts source `framework/*.func` from; point it at a branch to test it (see [Usage](#usage)). |
 | `_PKG_STATE_FILE` | `/var/lib/btc-scripts/packages` | Where package ownership (`pkg=appid`) is recorded so `remove` purges only what this app installed. |
 
@@ -235,20 +236,17 @@ sourced (not executed) by the leaf scripts:
 
 - `core.func` — colors/logging, shell/root checks, verbose mode, exit helper. Sourced by everything.
 - `engine.func` — the installer engine: the event-handler registry, `add_package <pkg> [svc...]`
-  (package + the service(s) the framework manages for it), `set_app_id`/`get_app_id`, batched
-  apt/systemd default handlers, and the `installer_run` driver with `install` / `update` / `remove`
-  modes. Install records which packages it actually installed (owned by the app id); `remove` purges
-  **only** those and disables only their services — pre-existing packages stay. Components clean up the
-  config they wrote in a `pre_remove` handler gated by `will_remove <pkg>`.
+  (package + the service(s) the framework manages for it), `set_app_id`/`get_app_id`,
+  `include_component` (pull a unit into the run, de-duplicated), the `pkg_installed`/`own_package`
+  helpers, batched apt/systemd default handlers, and the `installer_run` driver with
+  `install` / `update` / `remove` modes. Install records which packages it actually installed (owned by
+  the app id); `remove` purges **only** those and disables only their services — pre-existing packages
+  stay. Components clean up the config they wrote in a `pre_remove` handler gated by `will_remove <pkg>`.
 - `prompt.func` — the declarative `whiptail` question wizard (omits any question whose variable is
   already set; `title=` sets a human-readable dialog title). When it shows any question it also adds a
   verbose toggle and a summary/confirm page, and numbers the steps by what's actually shown.
-- `component-tools.func` — helpers shared by ≥2 components (`setup_zabbix_repo`). Single-use helpers
-  stay inline in their script.
-- `component.func` — entry point for the reusable units in `component/` (sources core + engine +
-  prompt + component-tools).
-- `composite.func` — entry point for the top-level composites (sources core + engine + prompt) and
-  adds `include_component` for pulling components into one combined run.
+- `component.func` / `composite.func` — entry points for the reusable units in `component/` and the
+  top-level composites; both source core + engine + prompt.
 
 A component is a flat script: it adds its package/service, registers questions for its config and
 handlers for lifecycle events (`configure`, `pre_install`, `install`, `post_install`, and the

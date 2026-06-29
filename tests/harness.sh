@@ -37,7 +37,6 @@ MODE="${2:-install}"
 source framework/core.func
 source framework/engine.func
 source framework/prompt.func
-source framework/component-tools.func
 source framework/component.func
 source framework/composite.func
 
@@ -104,16 +103,9 @@ hostname() { echo "dryrun-host"; }
 root_check() { :; }
 shell_check() { :; }
 
-# component-tools.func's setup_zabbix_repo needs /etc, a network and a real repo:
-# stub it but keep the idempotency guard so composition behaviour is still
-# exercised. (NTP now goes through the real chrony component handler.)
-_repo_calls=0
-setup_zabbix_repo() {
-  [[ -n "${_ZABBIX_REPO_DONE:-}" ]] && return 0
-  _repo_calls=$((_repo_calls + 1))
-  echo "    [setup_zabbix_repo version=${ZABBIX_VERSION:-?}] (call #${_repo_calls})"
-  _ZABBIX_REPO_DONE=1
-}
+# The Zabbix repo is now the zabbix-release component: its pre_install runs through the
+# wget/dpkg/apt-get stubs above and records zabbix-release ownership (visible in the
+# ownership artifact). include_component's dedup ensures it runs once per composite.
 
 # Answers without a declared default (e.g. SM_PROXY__CUSTOMER/SM_PROXY__LOCATION) are supplied as env
 # vars; the real run_questions (unattended) then skips them as already-set and
@@ -131,4 +123,4 @@ for f in "$DRYROOT"/*; do
   cat "$f"
 done
 echo
-echo "(repo setup invoked ${_repo_calls}x — should be 1 even when several zabbix units compose)"
+echo "(the ownership artifact should list zabbix-release once, even when several zabbix units compose)"

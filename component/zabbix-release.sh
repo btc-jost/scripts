@@ -1,6 +1,6 @@
-# shellcheck shell=bash
+#!/usr/bin/env bash
 #
-# btc Helper Scripts - Component Tools
+# btc Helper Scripts - Zabbix Release / Repository Component
 #
 # Copyright (C) 2025-2026  btc.jost AG
 # Copyright (C) 2025-2026  Simon Gilli
@@ -18,15 +18,20 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-# Helpers shared by more than one component. Single-use helpers stay inline in
-# their component for easier maintenance; only multi-component helpers live here.
-
-[[ -n "${_COMPONENT_TOOLS_FUNC_LOADED:-}" ]] && return
-_COMPONENT_TOOLS_FUNC_LOADED=1
-
 FUNC_BASE_URL="${FUNC_BASE_URL:-https://raw.githubusercontent.com/btc-jost/scripts/main}"
 # shellcheck disable=SC1090
-[[ -n "${_CORE_FUNC_LOADED:-}" ]] || source <(wget -qO- "${FUNC_BASE_URL}/framework/core.func")
+[[ -n "${_COMPONENT_FUNC_LOADED:-}" ]] || source <(wget -qO- "${FUNC_BASE_URL}/framework/component.func")
+
+# Contract vars (set before include_component): ZABBIX_VERSION.
+ZABBIX_VERSION="${ZABBIX_VERSION:-7.4}"
+
+set_app_id zabbix-release
+# zabbix-release is in APP_PACKAGES so the engine's batched apt step installs/owns it and
+# `remove` purges it. pre_install only bootstraps the repo (dpkg -i the release deb) when
+# it isn't already present, recording ownership right away so the install hint and removal
+# stay accurate.
+add_package zabbix-release
+register_event_handler pre_install zabbix_release_pre_install
 
 # ------------------------------------------------------------------------------
 # _version_ge <a> <b> - return 0 if version a >= version b (dotted compare).
@@ -39,17 +44,21 @@ _version_ge() {
 }
 
 # ------------------------------------------------------------------------------
-# setup_zabbix_repo - add the Zabbix apt repository for $ZABBIX_VERSION.
+# zabbix_release_pre_install - add the Zabbix apt repository for $ZABBIX_VERSION.
 #
 # Reads ZABBIX_VERSION (e.g. "7.0", "8.0") and /etc/os-release. The repo layout
 # changed at 7.2: older releases live under /zabbix/<ver>/<id>/, newer ones under
 # /zabbix/<ver>/release/<id>/. The "latest_<ver>+" filename exists in both.
 # Verified against repo.zabbix.com (7.0 debian, 8.0 release/debian).
+#
+# If zabbix-release is already installed (pre-existing repo), keep it untouched and
+# unowned (remove leaves it). Otherwise bootstrap via dpkg -i and own it.
 # ------------------------------------------------------------------------------
-setup_zabbix_repo() {
-  # Idempotent: if several zabbix components take part in one run, add the repo
-  # only once (the first call wins, using whatever ZABBIX_VERSION is set then).
-  [[ -n "${_ZABBIX_REPO_DONE:-}" ]] && return 0
+zabbix_release_pre_install() {
+  if pkg_installed zabbix-release; then
+    msg_note "Zabbix repository already present (zabbix-release installed); keeping it"
+    return 0
+  fi
 
   local version="${ZABBIX_VERSION:?ZABBIX_VERSION must be set}"
   local ID VERSION_ID
@@ -71,7 +80,7 @@ setup_zabbix_repo() {
   if $STD wget -O "${tmp}/${deb}" "$url" && $STD dpkg -i "${tmp}/${deb}"; then
     $STD apt-get update || true
     rm -rf "$tmp"
-    _ZABBIX_REPO_DONE=1
+    own_package zabbix-release
     msg_ok "Added Zabbix ${version} repository"
   else
     rm -rf "$tmp"
@@ -79,3 +88,5 @@ setup_zabbix_repo() {
     return 1
   fi
 }
+
+installer_run "$@"

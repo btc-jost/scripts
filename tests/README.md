@@ -8,7 +8,7 @@ execution. Prefer a throwaway LXC/VM for real installs, and use `remove` mode to
 ## What exists
 
 Event-driven Bash installer framework under `framework/` (layered: `core` → `engine` → entry
-points `component.func` / `composite.func`, plus `prompt` and the `*-tools` helpers), reusable
+points `component.func` / `composite.func`, plus `prompt`), reusable
 component units under `component/`, and composites (`zabbix/install-sm-proxy.sh`,
 `3cx/post-install.sh`, `proxmox/post-install.sh`). See the repo `CLAUDE.md` for the full
 architecture. Key ideas:
@@ -43,12 +43,14 @@ bash tests/harness.sh <script> [mode]
 SM_PROXY__CUSTOMER=acme SM_PROXY__LOCATION=zrh bash tests/harness.sh zabbix/install-sm-proxy.sh install
 ```
 
-Stubs `apt-get`/`systemctl`/`dpkg`/`dpkg-query`/`wget`/`chronyc`/`openssl` and `setup_zabbix_repo`,
-redirects config writes (and `LOGFILE`) under a temp dir, and asserts the batched install + grouped
-restart + repo idempotency. `apt-get`/`dpkg-query` share a simulated install DB, so an `install` run
-also writes the ownership file `installed-packages` (`pkg=appid`) as a visible artifact. It uses the
-real `run_questions` (unattended), so it also exercises the omit-when-set behaviour. Good for checking
-event ordering and composition; it does **not** prove the real package install works.
+Stubs `apt-get`/`systemctl`/`dpkg`/`dpkg-query`/`wget`/`chronyc`/`openssl`, redirects config writes
+(and `LOGFILE`) under a temp dir, and asserts the batched install + grouped restart. The Zabbix repo
+is the `zabbix-release` component now, so it runs through those stubs (no special stub); its
+`include_component` is deduped, so it appears once even when several zabbix units compose.
+`apt-get`/`dpkg-query` share a simulated install DB, so an `install` run also writes the ownership file
+`installed-packages` (`pkg=appid`) as a visible artifact. It uses the real `run_questions`
+(unattended), so it also exercises the omit-when-set behaviour. Good for checking event ordering and
+composition; it does **not** prove the real package install works.
 
 Each invocation uses a fresh temp tree, so a standalone `remove` run sees no prior ownership and warns
 "nothing to remove" — that's expected. To exercise the full install→remove cycle (pre-existing kept,
@@ -125,8 +127,8 @@ pre-existing packages, their services and config are left in place. Logs land in
   `main` script are back as framework-wide built-ins (see prompt.func / CLAUDE.md). The interactive
   branch is covered by headless whiptail-stub tests during development; still confirm the UX on a real
   terminal.
-- `setup_zabbix_repo` URL format was verified against the live repo for 7.0 and 8.0 (≤7.0 →
-  `/zabbix/<v>/<id>/`, ≥7.2 → `/zabbix/<v>/release/<id>/`, filename `zabbix-release_latest_<v>+<id><ver>_all.deb`).
-  Re-check 7.4 specifically when testing 3cx.
+- The `zabbix-release` component's repo URL format was verified against the live repo for 7.0 and 8.0
+  (≤7.0 → `/zabbix/<v>/<id>/`, ≥7.2 → `/zabbix/<v>/release/<id>/`, filename
+  `zabbix-release_latest_<v>+<id><ver>_all.deb`). Re-check 7.4 specifically when testing 3cx.
 - The interactive whiptail path could not be exercised on Windows; watch for `/dev/tty` / pipe
   behaviour when run as `wget … | bash` (handled via `is_unattended` checking `/dev/tty`).
